@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.env*
+!.env.example
+LOCAL_ACCESS.md
+*.tsbuildinfo
+storage/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+*.pem
+*.key
+*.p12
+*.pfx

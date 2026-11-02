@@ -1,0 +1,10 @@
+node_modules
+.git
+.next
+.env*
+!.env.example
+LOCAL_ACCESS.md
+storage
+test-results
+*.log
+*.tsbuildinfo
