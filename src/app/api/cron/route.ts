@@ -1,10 +1,8 @@
-import {NextResponse} from 'next/server';
-import {secretMatches} from '@/lib/auth';
 import {runCron} from '@/lib/worker';
+import {createCronHandler} from '@/lib/cron-handler';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-export async function POST(request:Request){
-  const token=request.headers.get('authorization')?.replace(/^Bearer /,'')||'';
-  if(!secretMatches(token,process.env.CRON_SECRET))return NextResponse.json({error:'Unauthorized'},{status:401});
-  try{return NextResponse.json(await runCron());}catch{console.error('Cron execution failed');return NextResponse.json({error:'Cron failed'},{status:500});}
-}
+export const maxDuration=120;
+const handler=createCronHandler(runCron);
+// Explicit HEAD prevents Next.js from using GET to execute a monitoring probe.
+export {handler as GET,handler as POST,handler as HEAD};

@@ -167,6 +167,8 @@ Trong cron-job.org tạo một job:
 | Body | `{}` |
 | Header bổ sung | `Content-Type: application/json` |
 
+Endpoint nhận cả **GET và POST**, cùng yêu cầu `Authorization: Bearer <CRON_SECRET>` và không cache kết quả. GET hỗ trợ các scheduler mặc định GET và Vercel Cron. HEAD chỉ trả 405, không chạy worker. Trên cron-job.org nên chọn POST, bấm **Save** trước khi **Test run**; sửa header không tự đổi Request method. Không dùng `CRON_SECRET` làm tên header và không đặt secret trong URL. Giới hạn Function là 120 giây, nhưng cron-job.org mặc định ngắt chờ sau 30 giây: timeout của scheduler không chứng minh thư chưa được gửi, cần xem log/Message-ID trước khi thử lại.
+
 Secret lấy từ env máy chủ, không đặt trong URL. Bật thông báo khi job thất bại trên dịch vụ. HTTP 200 có `blocked` nghĩa là endpoint chạy được nhưng lượt gửi đang được giữ lại; xem **Lịch sử & giám sát**. HTTP 401 là sai secret. `{busy:true}` nghĩa là một lượt khác đang xử lý, không phải gửi trùng.
 
 cron-job.org hỗ trợ POST, custom headers, lịch mỗi phút và mặc định timeout 30 giây: [FAQ chính thức](https://cron-job.org/en/faq/). Worker giới hạn đồng bộ khoảng 8 giây và dispatch khoảng 12 giây; độ trễ database/mạng vẫn cần theo dõi. Không tạo tài khoản/job bên ngoài trong lần triển khai local này.
