@@ -50,7 +50,7 @@ export async function runCron(){
   try{
     await run('INSERT INTO cron_runs(id,status) VALUES (?,?)',[runId,'running']);
     await setting('last_cron_at',new Date().toISOString());
-    await run("UPDATE campaign_recipients SET status='unknown',error='Worker gián đoạn sau khi claim; cần đối soát, không tự gửi lại' WHERE status='sending' AND claimedAt<DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 2 MINUTE)");
+    await run("UPDATE campaign_recipients SET status='unknown',error='Worker gián đoạn sau khi claim; cần đối soát, không tự gửi lại' WHERE status='sending' AND claimedAt<DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 5 MINUTE)");
     await run('DELETE FROM sessions WHERE expiresAt<UTC_TIMESTAMP(3)');await run('DELETE FROM oauth_states WHERE expiresAt<UTC_TIMESTAMP(3)');
     const boxes=await rows('SELECT userId FROM mailboxes ORDER BY COALESCE(lastSyncAt,\'2000-01-01\') LIMIT 2');
     for(const box of boxes){if(Date.now()-started>7000)break;try{await syncMailbox(box.userId,Math.max(1000,8000-(Date.now()-started)));}catch{await run("UPDATE mailboxes SET lastError='Không đồng bộ được inbox. Sequence được giữ lại cho đến khi kết nối phục hồi.' WHERE userId=?",[box.userId]);}}

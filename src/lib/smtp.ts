@@ -68,3 +68,16 @@ export async function sendSmtpMail(message:SendMailOptions,options?:SMTPTranspor
   }catch(error){throw new SmtpDeliveryError(error,stage);}
   finally{if(timer)clearTimeout(timer);socket.destroy();transport?.close();}
 }
+
+// AUTH/connection check only: verify() never submits a message or recipient.
+export async function verifySmtp(options?:SMTPTransport.Options,deadlineMs:number=SMTP_TIMEOUTS.total){
+  let stage:SmtpStage='connecting',timer:ReturnType<typeof setTimeout>|undefined;
+  const socket=new Socket();
+  let transport:Awaited<ReturnType<typeof smtpTransport>>|undefined;
+  try{
+    transport=await smtpTransport(options,value=>{stage=value;},socket);
+    await Promise.race([transport.verify(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('SMTP deadline'),{code:'ETIMEDOUT'})),deadlineMs);})]);
+    return {ok:true as const,message:'Kết nối và xác thực SMTP thành công. Chưa gửi email.'};
+  }catch(error){return {ok:false as const,message:classifySmtpFailure(error,stage).message};}
+  finally{if(timer)clearTimeout(timer);socket.destroy();transport?.close();}
+}

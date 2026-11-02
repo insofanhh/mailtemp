@@ -6,7 +6,7 @@ import type {User} from './auth';
 
 export async function workspace(user:User){
   const admin=user.role==='admin', scope="a.deletedAt IS NULL"+(admin?'':' AND a.ownerId=?'), args=admin?[]:[user.id];
-  const [accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings,mailboxes,cronRuns,imports]=await Promise.all([
+  const [accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings,mailboxes,cronRuns,imports,directHealth]=await Promise.all([
     rows(`SELECT a.*,u.name ownerName,(SELECT COUNT(*) FROM contacts c WHERE c.accountId=a.id) contactCount FROM accounts a JOIN users u ON u.id=a.ownerId WHERE ${scope} ORDER BY a.createdAt DESC`,args),
     rows(`SELECT c.*,a.name accountName,a.ownerId,a.tier FROM contacts c JOIN accounts a ON a.id=c.accountId WHERE ${scope} ORDER BY c.createdAt DESC`,args),
     rows('SELECT * FROM products ORDER BY createdAt DESC'),rows('SELECT * FROM templates ORDER BY createdAt DESC'),
@@ -22,7 +22,8 @@ export async function workspace(user:User){
     rows('SELECT settingKey,value,updatedAt FROM settings'),
     rows(`SELECT id,userId,provider,email,lastSyncAt,lastError FROM mailboxes ${admin?'':'WHERE userId=?'}`,args),
     admin?rows('SELECT * FROM cron_runs ORDER BY startedAt DESC LIMIT 10'):Promise.resolve([]),
-    rows(`SELECT * FROM import_batches ${admin?'':'WHERE actorId=?'} ORDER BY createdAt DESC LIMIT 20`,args)
+    rows(`SELECT * FROM import_batches ${admin?'':'WHERE actorId=?'} ORDER BY createdAt DESC LIMIT 20`,args),
+    rows(`SELECT COUNT(*) pending,MIN(b.createdAt) oldest FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.status='pending' AND b.status IN ('queued','running') ${admin?'':'AND b.ownerId=?'}`,args)
   ]);
-  return {serverTime:new Date().toISOString(),user,accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings:Object.fromEntries(settings.map(s=>[s.settingKey,s.value])),mailboxes,cronRuns,imports,infrastructure:{smtpConfigured:Boolean(process.env.SMTP_HOST&&process.env.SMTP_FROM_EMAIL),smtpEnabled:mailReady(),mailEnabled:process.env.MAIL_ENABLED==='true',googleConfigured:oauthConfigured('google'),microsoftConfigured:oauthConfigured('microsoft'),appUrl:appOrigin(),cronConfigured:Boolean(process.env.CRON_SECRET&&process.env.CRON_SECRET.length>=32),replySyncRequired:process.env.REPLY_SYNC_REQUIRED!=='false'}};
+  return {serverTime:new Date().toISOString(),user,accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings:Object.fromEntries(settings.map(s=>[s.settingKey,s.value])),mailboxes,cronRuns,imports,infrastructure:{directPending:Number(directHealth[0]?.pending||0),oldestDirectPending:directHealth[0]?.oldest||null,smtpConfigured:Boolean(process.env.SMTP_HOST&&process.env.SMTP_FROM_EMAIL),smtpEnabled:mailReady(),mailEnabled:process.env.MAIL_ENABLED==='true',googleConfigured:oauthConfigured('google'),microsoftConfigured:oauthConfigured('microsoft'),appUrl:appOrigin(),cronConfigured:Boolean(process.env.CRON_SECRET&&process.env.CRON_SECRET.length>=32),replySyncRequired:process.env.REPLY_SYNC_REQUIRED!=='false'}};
 }

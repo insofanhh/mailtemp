@@ -1,7 +1,7 @@
 import test,{type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer,type Socket} from 'node:net';
-import {classifySmtpFailure,deliveryFailure,sendSmtpMail,SmtpDeliveryError} from '../src/lib/smtp';
+import {classifySmtpFailure,deliveryFailure,sendSmtpMail,SmtpDeliveryError,verifySmtp} from '../src/lib/smtp';
 
 type Mode='accept'|'drop_before_data'|'drop_after_data'|'hold_after_data'|'reject_auth'|'reject_after_data';
 async function fixture(t:TestContext,mode:Mode='accept',greetingDelay=0){
@@ -38,6 +38,21 @@ async function fixture(t:TestContext,mode:Mode='accept',greetingDelay=0){
   return {stats,options:{host:'127.0.0.1',port:address.port,secure:false,requireTLS:false,...(mode==='reject_auth'?{auth:{user:'fixture',pass:'not-a-real-password'}}:{})}};
 }
 const message={from:'sender@example.invalid',to:'recipient@example.invalid',subject:'SMTP fixture',text:'Local test only.'};
+
+test('SMTP verification authenticates without MAIL FROM, RCPT TO or DATA',async t=>{
+  const {options,stats}=await fixture(t);
+  const result=await verifySmtp(options);
+  assert.equal(result.ok,true);assert.equal(stats.dataStarted,0);assert.equal(stats.messages,0);
+});
+
+test('SMTP verification failure is sanitized and its deadline closes the connection',async t=>{
+  const rejected=await fixture(t,'reject_auth');
+  const failure=await verifySmtp(rejected.options);
+  assert.equal(failure.ok,false);assert.match(failure.message,/535/);assert.doesNotMatch(failure.message,/not-a-real-password/);
+  const slow=await fixture(t,'accept',200);
+  assert.equal((await verifySmtp(slow.options,50)).ok,false);
+  await new Promise(resolve=>setTimeout(resolve,250));assert.equal(slow.stats.messages,0);
+});
 
 test('Slow SMTP greeting beyond the former 8 second limit still sends exactly once',async t=>{
   const {options,stats}=await fixture(t,'accept',9000);

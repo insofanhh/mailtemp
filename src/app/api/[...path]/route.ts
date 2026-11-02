@@ -16,6 +16,7 @@ import {previewDirectMail,startDirectMail,directMailList,directMailDetails,contr
 import {DIRECT_SCHEDULED_BLOCK_SQL} from '@/lib/direct-mail-conflicts';
 import {oauthStart,oauthCallback,syncMailbox} from '@/lib/oauth';
 import {appOrigin} from '@/lib/app-url';
+import {enqueueDirectBatch} from '@/lib/mail-queue';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -55,10 +56,10 @@ async function handle(request:Request,context:Context){
   if(resource==='direct-mail'){
     if(method==='GET')return ok(id?await directMailDetails(user,schemas.id.parse(id)):await directMailList(user));
     if(method==='POST'&&id==='preview')return ok(await previewDirectMail(user,directMailSchema.parse(await json(request))));
-    if(method==='POST'&&!id){const data=directStartSchema.parse(await json(request));return ok(await startDirectMail(user,data.input,data.requestId,data.previewToken,data.acceptExclusions,data.acceptDuplicateRisk));}
+    if(method==='POST'&&!id){const data=directStartSchema.parse(await json(request));const result=await startDirectMail(user,data.input,data.requestId,data.previewToken,data.acceptExclusions,data.acceptDuplicateRisk);return ok({...result,dispatch:await enqueueDirectBatch(result.id)});}
     if(method==='POST'&&id&&action==='authorize-retry'){const data=directRetrySchema.parse(await json(request));await authorizeDirectRetry(user,schemas.id.parse(id),data.recipientId,data.reason);return ok();}
     if(method==='POST'&&id&&action==='reconcile'){const data=z.object({recipientId:z.uuid(),result:z.enum(['accepted','not_sent']),evidence:z.string().trim().min(20).max(2000)}).parse(await json(request));await reconcileDirectMail(user,schemas.id.parse(id),data.recipientId,data.result,data.evidence);return ok();}
-    if(method==='PATCH'&&id){const data=z.object({action:z.enum(['pause','resume','cancel'])}).parse(await json(request));await controlDirectMail(user,schemas.id.parse(id),data.action);return ok();}
+    if(method==='PATCH'&&id){const data=z.object({action:z.enum(['pause','resume','cancel'])}).parse(await json(request));await controlDirectMail(user,schemas.id.parse(id),data.action);return ok(data.action==='resume'?{dispatch:await enqueueDirectBatch(id)}:{ok:true});}
   }
   if(resource==='state'&&method==='GET')return ok(await workspace(user));
   if(resource==='oauth'&&['google','microsoft'].includes(id)&&method==='GET'){

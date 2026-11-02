@@ -109,10 +109,14 @@ export async function directMailDetails(user:User,id:string){
   return {batch,recipients,gate};
 }
 export async function directMailList(user:User){
-  return rows(`SELECT b.id,b.ownerId,b.name,b.status,b.createdAt,b.finishedAt,u.name ownerName,COUNT(r.id) total,
-    SUM(r.status='accepted') accepted,SUM(r.status='pending') pending,SUM(r.status='sending') sending,
-    SUM(r.status='skipped') skipped,SUM(r.status='failed') failed,SUM(r.status='unknown') unknownCount
-    FROM direct_mail_batches b JOIN users u ON u.id=b.ownerId LEFT JOIN direct_mail_recipients r ON r.batchId=b.id ${user.role==='admin'?'':'WHERE b.ownerId=?'} GROUP BY b.id ORDER BY b.createdAt DESC LIMIT 100`,user.role==='admin'?[]:[user.id]);
+  return rows(`SELECT b.id,b.ownerId,b.name,b.status,b.createdAt,b.finishedAt,u.name ownerName,
+    COALESCE(r.total,0) total,COALESCE(r.accepted,0) accepted,COALESCE(r.pending,0) pending,
+    COALESCE(r.sending,0) sending,COALESCE(r.skipped,0) skipped,COALESCE(r.failed,0) failed,COALESCE(r.unknownCount,0) unknownCount
+    FROM direct_mail_batches b JOIN users u ON u.id=b.ownerId LEFT JOIN (
+      SELECT batchId,COUNT(*) total,SUM(status='accepted') accepted,SUM(status='pending') pending,
+      SUM(status='sending') sending,SUM(status='skipped') skipped,SUM(status='failed') failed,SUM(status='unknown') unknownCount
+      FROM direct_mail_recipients GROUP BY batchId
+    ) r ON r.batchId=b.id ${user.role==='admin'?'':'WHERE b.ownerId=?'} ORDER BY b.createdAt DESC LIMIT 100`,user.role==='admin'?[]:[user.id]);
 }
 export async function controlDirectMail(user:User,id:string,action:'pause'|'resume'|'cancel'){
   await transaction(async db=>{
@@ -208,23 +212,29 @@ export async function dispatchDirectRecipient(recipientId:string,send:DirectSend
   }
   return true;
 }
-export async function finishDirectBatches(){
-  await run("UPDATE direct_mail_batches b SET status=IF(EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status='unknown' AND r.retryAuthorizedAt IS NULL),'needs_review',IF(EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status='unknown'),'review_released','completed')),finishedAt=UTC_TIMESTAMP(3) WHERE b.status IN ('queued','running') AND NOT EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status IN ('pending','sending'))");
+export async function finishDirectBatches(batchId?:string){
+  await run("UPDATE direct_mail_batches b SET status=IF(EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status='unknown' AND r.retryAuthorizedAt IS NULL),'needs_review',IF(EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status='unknown'),'review_released','completed')),finishedAt=UTC_TIMESTAMP(3) WHERE b.status IN ('queued','running') AND NOT EXISTS(SELECT 1 FROM direct_mail_recipients r WHERE r.batchId=b.id AND r.status IN ('pending','sending'))"+(batchId?' AND b.id=?':''),batchId?[batchId]:[]);
 }
-export async function runDirectQueue(){
+// One SMTP transaction (90s deadline) per invocation fits inside a 120s Function.
+// The five-minute abandoned-claim window also covers database work and shutdown.
+export async function runDirectQueue(options:{batchId?:string;send?:DirectSender}={}){
   const lock=await pool().getConnection();
+  let acquired=false;
   try{
     const [result]=await lock.query('SELECT GET_LOCK(?,0) acquired',[DIRECT_QUEUE_LOCK]);
-    if(!(result as {acquired:number}[])[0].acquired)return;
-    await run("UPDATE direct_mail_recipients SET status='unknown',error='Tiến trình gián đoạn sau khi bắt đầu gửi. Cần đối soát; không tự gửi lại.' WHERE status='sending' AND claimedAt<DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 2 MINUTE)");
-    const started=Date.now();
-    for(let i=0;i<5&&Date.now()-started<10000;i++){
-      const candidates=await rows("SELECT r.id,b.ownerId FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.status='pending' AND b.status IN ('queued','running') ORDER BY b.createdAt,r.id LIMIT 100");
-      let next:null|string=null;
-      for(const candidate of candidates)if(!await sendingGate(candidate.ownerId)){next=candidate.id;break;}
-      if(!next)break;
-      await dispatchDirectRecipient(next);
-    }
-    await finishDirectBatches();
-  }finally{await lock.query('SELECT RELEASE_LOCK(?)',[DIRECT_QUEUE_LOCK]);lock.release();}
+    acquired=!!(result as {acquired:number}[])[0].acquired;
+    if(!acquired)return {busy:true,processed:0,blocked:null};
+    await run("INSERT INTO settings(settingKey,value) VALUES ('last_direct_worker_at',?) ON DUPLICATE KEY UPDATE value=VALUES(value)",[new Date().toISOString()]);
+    await run("UPDATE direct_mail_recipients SET status='unknown',error='Tiến trình gián đoạn sau khi bắt đầu gửi. Cần đối soát; không tự gửi lại.' WHERE status='sending' AND claimedAt<DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 5 MINUTE)"+(options.batchId?' AND batchId=?':''),options.batchId?[options.batchId]:[]);
+    const candidates=await rows("SELECT r.id,b.ownerId FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.status='pending' AND b.status IN ('queued','running')"+(options.batchId?' AND b.id=?':'')+" ORDER BY b.createdAt,r.id LIMIT 100",options.batchId?[options.batchId]:[]);
+    let next:null|string=null,blocked:string|null=null;
+    for(const candidate of candidates){const gate=await sendingGate(candidate.ownerId);if(!gate){next=candidate.id;break;}blocked=gate;}
+    const processed=next&&await dispatchDirectRecipient(next,options.send)?1:0;
+    await finishDirectBatches(options.batchId);
+    await run("INSERT INTO settings(settingKey,value) VALUES ('direct_worker_status',?) ON DUPLICATE KEY UPDATE value=VALUES(value)",[blocked||'Đã kiểm tra hàng đợi gửi trực tiếp.']);
+    return {busy:false,processed,blocked};
+  }catch(error){
+    await run("INSERT INTO settings(settingKey,value) VALUES ('direct_worker_status','Tiến trình gặp lỗi; tác vụ được giữ để khôi phục. Xem log máy chủ.') ON DUPLICATE KEY UPDATE value=VALUES(value)");
+    throw error;
+  }finally{try{if(acquired)await lock.query('SELECT RELEASE_LOCK(?)',[DIRECT_QUEUE_LOCK]);}finally{lock.release();}}
 }

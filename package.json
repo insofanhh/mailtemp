@@ -15,6 +15,7 @@
     "test:bulk-delete": "tsx scripts/bulk-delete-test.ts",
     "test:account-delete": "tsx scripts/account-delete-test.ts",
     "test:direct-mail": "tsx scripts/direct-mail-test.ts",
+    "test:direct-queue": "tsx scripts/direct-queue-test.ts",
     "test:direct-conflicts": "tsx scripts/direct-conflicts-test.ts",
     "test:recipient-policy": "tsx scripts/recipient-policy-test.ts",
     "test:optional-product": "tsx scripts/optional-product-test.ts",
@@ -27,6 +28,7 @@
   },
   "dependencies": {
     "@next/env": "^16.4.3",
+    "@vercel/queue": "^0.10.0",
     "bcryptjs": "^3.0.2",
     "fflate": "^0.8.3",
     "lucide-react": "^0.468.0",

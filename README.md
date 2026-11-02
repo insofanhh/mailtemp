@@ -93,7 +93,7 @@ flowchart LR
 
 cron-job.org là bộ lập lịch HTTP; Socket.IO chạy trên máy chủ ứng dụng và cập nhật trình duyệt. Server đọc sự kiện bền vững từ MySQL mỗi giây, nên thông báo vẫn hoạt động khi API và custom server dùng các module riêng. Khi WebSocket mất kết nối, giao diện tải lại dữ liệu mỗi 30 giây.
 
-Stack: Next.js App Router, React, TypeScript, mysql2, Socket.IO, Nodemailer, Zod, bcrypt, PapaParse và read-excel-file. Queue là bảng MySQL có giao dịch và named lock; không cần Redis cho quy mô hiện tại.
+Stack: Next.js App Router, React, TypeScript, mysql2, Socket.IO, Nodemailer, Zod, bcrypt, PapaParse và read-excel-file. MySQL/TiDB lưu hàng đợi, giao dịch và named lock; Vercel Queues kích hoạt worker trên production. Không cần Redis cho quy mô hiện tại.
 
 ## Cấu hình SMTP khi có thông tin
 
@@ -167,11 +167,11 @@ Trong cron-job.org tạo một job:
 | Body | `{}` |
 | Header bổ sung | `Content-Type: application/json` |
 
-Endpoint nhận cả **GET và POST**, cùng yêu cầu `Authorization: Bearer <CRON_SECRET>` và không cache kết quả. GET hỗ trợ các scheduler mặc định GET và Vercel Cron. HEAD chỉ trả 405, không chạy worker. Trên cron-job.org nên chọn POST, bấm **Save** trước khi **Test run**; sửa header không tự đổi Request method. Không dùng `CRON_SECRET` làm tên header và không đặt secret trong URL. Giới hạn Function là 120 giây, nhưng cron-job.org mặc định ngắt chờ sau 30 giây: timeout của scheduler không chứng minh thư chưa được gửi, cần xem log/Message-ID trước khi thử lại.
+Endpoint nhận cả **GET và POST**, cùng yêu cầu `Authorization: Bearer <CRON_SECRET>` và không cache kết quả. GET hỗ trợ các scheduler mặc định GET và Vercel Cron. HEAD chỉ trả 405, không chạy worker. Trên cron-job.org nên chọn POST, bấm **Save** trước khi **Test run**; sửa header không tự đổi Request method. Không dùng `CRON_SECRET` làm tên header và không đặt secret trong URL. Production trả `queued: true` sau khi phát tác vụ; SMTP chạy trong consumer tối đa 120 giây, tách khỏi thời gian chờ 30 giây của cron-job.org. Xem trạng thái từng người nhận để biết kết quả gửi.
 
 Secret lấy từ env máy chủ, không đặt trong URL. Bật thông báo khi job thất bại trên dịch vụ. HTTP 200 có `blocked` nghĩa là endpoint chạy được nhưng lượt gửi đang được giữ lại; xem **Lịch sử & giám sát**. HTTP 401 là sai secret. `{busy:true}` nghĩa là một lượt khác đang xử lý, không phải gửi trùng.
 
-cron-job.org hỗ trợ POST, custom headers, lịch mỗi phút và mặc định timeout 30 giây: [FAQ chính thức](https://cron-job.org/en/faq/). Worker giới hạn đồng bộ khoảng 8 giây và dispatch khoảng 12 giây; độ trễ database/mạng vẫn cần theo dõi. Không tạo tài khoản/job bên ngoài trong lần triển khai local này.
+cron-job.org hỗ trợ POST, custom headers, lịch mỗi phút và mặc định timeout 30 giây: [FAQ chính thức](https://cron-job.org/en/faq/). Worker chiến dịch giới hạn đồng bộ khoảng 8 giây và chỉ bắt đầu tối đa một email mỗi lượt; một giao dịch SMTP có deadline 90 giây. Trên Vercel, cron chỉ xếp tác vụ còn consumer thực thi chúng. TiDB giữ tác vụ chưa bắt đầu để lần cron sau khôi phục nếu phát queue thất bại.
 
 ## Adapter sự kiện
 
@@ -308,14 +308,16 @@ Nhập chỉ có email: ghép cột Email liên hệ rồi xem trước và nh�
 
 Menu **Gửi mail trực tiếp** (`/?view=direct-mail`) cho phép tự soạn hoặc lấy nội dung từ mẫu, chọn chương trình tùy chọn, chọn tối đa 1.000 liên hệ, kiểm tra từng người nhận và xác nhận **Gửi ngay**. Mặc định bộ lọc bao gồm liên hệ chưa đánh giá; người gửi có thể chọn chỉ liên hệ đủ điều kiện. Các kiểm tra chặn, nguồn, quốc gia VN, bảng giá, quyền sở hữu và khoảng cách 24 giờ của liên hệ vẫn áp dụng. Hệ thống báo rõ xung đột với lượt gửi/chiến dịch đang hoạt động; hủy lượt chờ cũ trước khi tạo lượt mới để tránh gửi trùng.
 
-- Bộ gửi chạy trong `server.ts`, kiểm tra hàng đợi MySQL mỗi giây, dùng MySQL named lock để tránh nhiều tiến trình gửi cùng lúc. Bắt đầu xử lý ngay sau xác nhận, gửi lần lượt; không chờ cron hoặc giờ hành chính, không yêu cầu địa chỉ doanh nghiệp hay đồng bộ inbox, không áp dụng giới hạn pilot 20 mail/ngày và 60 giây/lượt của chiến dịch. Giới hạn và chính sách của nhà cung cấp vẫn áp dụng.
-- Cần MySQL, SMTP hoặc OAuth và `MAIL_ENABLED=true`. Chạy ứng dụng qua `npm start`/`npm run dev` (custom server). Khi ứng dụng dừng, hàng đợi giữ nguyên; phần chưa bắt đầu tiếp tục sau khi khởi động. Đóng trang không dừng gửi. Dừng khẩn cấp của hệ thống vẫn được giữ.
+- Trên Vercel production, API lưu lượt gửi vào TiDB rồi phát tác vụ Vercel Queues. Consumer riêng xử lý một người nhận mỗi lần, phát tác vụ tiếp theo nếu còn người chờ. `vercel.json` đăng ký consumer private; SDK dùng OIDC tự động, không cần thêm khóa dịch vụ. TiDB và named lock quyết định quyền gửi, kể cả khi queue giao cùng tác vụ nhiều lần. Local/VPS vẫn dùng `server.ts` kiểm tra hàng đợi mỗi giây.
+- Cần MySQL/TiDB, SMTP hoặc OAuth và `MAIL_ENABLED=true`. Gửi trực tiếp không chờ giờ hành chính, không yêu cầu địa chỉ doanh nghiệp hay đồng bộ inbox và không áp dụng giới hạn pilot của chiến dịch. Giới hạn nhà cung cấp và dừng khẩn cấp vẫn áp dụng. Đóng trình duyệt không dừng gửi. Preview không phát tác vụ queue; dùng production để kiểm tra queue thực tế.
 - `direct_mail_batches` và `direct_mail_recipients` lưu nội dung, bộ lọc, snapshot bảng giá, kết quả từng email, số lần thử và Message-ID. Khóa idempotency theo người gửi + requestId ngăn bấm lặp hoặc mất phản hồi tạo nhiều lượt. Nội dung và danh sách được kiểm tra bằng token trước xác nhận; kiểm tra lại quyền/chặn/địa chỉ ngay trước dispatch.
 - Trạng thái `accepted` chỉ xác nhận nhà cung cấp nhận yêu cầu, chưa xác nhận vào Inbox. SMTP 4xx/5xx hoặc lỗi trước DATA hiển thị `failed` với giai đoạn và mã lỗi; lỗi mất kết nối sau khi bắt đầu DATA là `unknown`, không tự gửi lại. Hệ thống theo dõi tiến trình SMTP vì lỗi Nodemailer `command=CONN` vẫn có thể xảy ra sau DATA. Quản trị viên có thể đối soát theo Message-ID và nhập bằng chứng. Tạm dừng/tiếp tục hoặc dừng phần chưa gửi; email đã chuyển tới nhà cung cấp không thể thu hồi.
-- Gửi trực tiếp và chiến dịch dùng chung thời gian chờ SMTP: kết nối 30 giây, chào 30 giây, socket 60 giây; tổng mỗi lượt tối đa 90 giây, đóng socket thật khi hết hạn (trước mốc 2 phút đánh dấu worker gián đoạn). Đã bỏ giới hạn SMTP 12 giây riêng của chiến dịch. Đặt thời gian chờ HTTP của cron-job.org phù hợp với một lượt xử lý; khóa MySQL vẫn ngăn xử lý đồng thời. Kiểm thử local SMTP với chào trễ trên 8 giây, lỗi xác thực, mất kết nối trước/sau DATA và hết hạn được chạy trong `npm test`, không gửi ra ngoài.
+- SMTP: kết nối 30 giây, chào 30 giây, socket 60 giây, tổng tối đa 90 giây và đóng socket thật khi hết hạn. Function consumer tối đa 120 giây, claim gián đoạn sau 5 phút chuyển `unknown`, không tự gửi lại. Trên Vercel, cron chỉ phát tác vụ khôi phục và tác vụ chiến dịch rồi trả kết quả, không chờ SMTP. `queued: true` nghĩa là đã xếp tác vụ, không có nghĩa đã gửi mail. Có thể giữ job cron-job.org mỗi phút và header Bearer hiện tại.
+- Settings hiển thị lần chạy worker, số email chờ, tuổi lượt chờ, lần khôi phục và lỗi queue. Nút kiểm tra SMTP gọi `verify()` (kết nối/xác thực, không gửi thư), ghi thời điểm và kết quả gần nhất. Kết quả đó không xác nhận vào Inbox.
 - Chữ ký và liên kết từ chối vẫn được thêm. Bỏ bắt buộc địa chỉ doanh nghiệp trong tính năng này là cấu hình nghiệp vụ; không xác nhận quyền gửi quảng cáo của danh sách.
 - API: `POST /api/direct-mail/preview`, `POST /api/direct-mail` với `{input,requestId,previewToken,acceptExclusions}`, `GET /api/direct-mail`, `GET /api/direct-mail/:id`, `PATCH /api/direct-mail/:id` với action pause/resume/cancel; `POST /api/direct-mail/:id/reconcile` chỉ admin. Phiên đăng nhập và cùng Origin áp dụng cho mọi thao tác.
 - Chạy `npm run db:migrate` trước khi khởi động bản mới. Kiểm thử `npm run test:direct-mail` khóa hàng đợi nền trong toàn bộ vòng đời fixture và dùng bộ gửi giả được inject trong tiến trình; không gọi cron, SMTP hoặc OAuth thật. Không có API cho phép client chọn bộ gửi giả.
+- Bản sửa queue không cần thêm bảng/cột. `npm test` kiểm tra điều phối queue, lỗi tải giao diện và SMTP giả lập. `npm run test:direct-queue` kiểm tra DB thật với transport inject: khóa đồng thời, mỗi lần một người nhận, lặp tác vụ không gửi lại, claim gián đoạn, pause/resume/cancel. Chạy fixture trên database phát triển.
 
 
 ## Xung đột người nhận và gửi lại có kiểm soát
