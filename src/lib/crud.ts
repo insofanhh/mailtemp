@@ -157,7 +157,7 @@ async function update(user:User,resource:Resource,id:string,body:unknown){return
     const ownerId=user.role==='admin'?(data.ownerId||old.ownerId):old.ownerId;await activeOwner(ownerId,db);
     const contacts=await rows(`SELECT c.id,c.accountId,a.ownerId FROM contacts c JOIN accounts a ON a.id=c.accountId WHERE a.deletedAt IS NULL AND c.id IN (${data.contactIds.map(()=>'?').join(',')})`,data.contactIds,db);
     if(contacts.length!==new Set(data.contactIds).size||contacts.some(c=>c.ownerId!==ownerId)||new Set(contacts.map(c=>c.accountId)).size!==contacts.length)throw new HttpError(409,'Chọn một liên hệ mỗi đại lý, thuộc cùng sale phụ trách chiến dịch.');
-    await run('UPDATE campaigns SET name=?,ownerId=?,templateId=?,productId=?,recipientPolicy=?,followupBody=?,followupDays=?,approvedAt=NULL,approvedBy=NULL,scheduledAt=NULL WHERE id=?',[data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.followupBody,data.followupDays,id],db);
+    await run('UPDATE campaigns SET name=?,ownerId=?,templateId=?,productId=?,recipientPolicy=?,allowTemplateResend=?,followupBody=?,followupDays=?,approvedAt=NULL,approvedBy=NULL,scheduledAt=NULL WHERE id=?',[data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.allowTemplateResend,data.followupBody,data.followupDays,id],db);
     await run('DELETE FROM campaign_recipients WHERE campaignId=?',[id],db);
     for(const contactId of new Set(data.contactIds))await run('INSERT INTO campaign_recipients(id,campaignId,contactId) VALUES (?,?,?)',[randomUUID(),id,contactId],db);
   }else throw new HttpError(404,'Không tìm thấy thao tác cập nhật.');

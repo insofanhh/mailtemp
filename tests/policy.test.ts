@@ -12,7 +12,7 @@ test('Website source never grants sending eligibility; review needs evidence',()
 });
 test('Suppression, stale rates, incorrect tiers and replies block dispatch',()=>{
   assert.equal(blockReason(ready),null);
-  for(const change of [{suppressed:true},{validUntil:'2026-11-01'},{tier:'VIP'},{country:'OTHER'},{lastReplyAt:'2026-11-02 03:00:00',approvedAt:'2026-11-02 02:00:00'},{lastContactedAt:'2026-11-02 02:00:00'}])assert.ok(blockReason({...ready,...change}));
+  for(const change of [{suppressed:true},{validUntil:'2026-11-01'},{tier:'VIP'},{country:'OTHER'},{lastReplyAt:'2026-11-02 03:00:00',approvedAt:'2026-11-02 02:00:00'}])assert.ok(blockReason({...ready,...change}));
 });
 test('Deleted agencies block dispatch even with valid consent and rates',()=>{
   assert.equal(blockReason({...ready,accountDeletedAt:'2026-11-02 03:00:00'}),'Đại lý đã bị xóa.');
@@ -29,7 +29,7 @@ test('Campaign may include unreviewed contacts without granting consent or bypas
   assert.equal(blockReason(unreviewed),null);
   assert.ok(blockReason({...unreviewed,recipientPolicy:'eligible_only'}));
   assert.ok(blockReason({...unreviewed,recipientPolicy:'invalid'}));
-  for(const change of [{consentStatus:'needs_evidence'},{consentStatus:'ineligible'},{consentStatus:'suppressed'},{suppressed:true},{consentStatus:'eligible'},{source:''},{country:''},{country:'OTHER'},{validUntil:'2026-01-01'},{tier:'VIP'},{accountDeletedAt:'2026-11-02'},{lastContactedAt:'2026-11-02 02:00:00'}])assert.ok(blockReason({...unreviewed,...change}),JSON.stringify(change));
+  for(const change of [{consentStatus:'needs_evidence'},{consentStatus:'ineligible'},{consentStatus:'suppressed'},{suppressed:true},{consentStatus:'eligible'},{source:''},{country:''},{country:'OTHER'},{validUntil:'2026-01-01'},{tier:'VIP'},{accountDeletedAt:'2026-11-02'}])assert.ok(blockReason({...unreviewed,...change}),JSON.stringify(change));
   assert.equal(unreviewed.consentStatus,'unreviewed');
 });
 test('Missing personalization cannot leak raw template variables',()=>{

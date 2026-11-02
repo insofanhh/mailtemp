@@ -25,10 +25,10 @@ test('Product variables in subject, body or follow-up require a product',()=>{
   const mail=renderMail('{{tour_name}}','{{duration}} · {{price}}/{{unit}} · {{valid_until}} · {{conditions}}',{accountName:'A'},{name:'Huế',duration:'3N2Đ',price:2000000,currency:'VND',unit:'khách',validUntil:'2099-12-31',conditions:'Theo thỏa thuận'},'Sale');
   assert.equal(mail.subject,'[QC] Huế');assert.ok(mail.body.includes('2.000.000 VND/khách'));
 });
-test('No-product campaigns still enforce consent, source, market, suppression, reply and contact cooldown',()=>{
+test('No-product campaigns still enforce consent, source, market, suppression, reply and template history',()=>{
   const ready:PolicyInput={hasProduct:false,consentStatus:'eligible',evidence:'Đăng ký nhận tin',purpose:'Hợp tác du lịch',country:'VN',suppressed:false,source:'Phiếu đăng ký',validUntil:'',tier:'Khác',productTier:'',now:new Date('2026-11-02T03:00:00Z')};
   assert.equal(blockReason(ready),null);
-  for(const change of [{consentStatus:'unreviewed'},{evidence:''},{purpose:''},{source:''},{country:'OTHER'},{suppressed:true},{accountDeletedAt:'2026-11-02 02:00:00'},{lastReplyAt:'2026-11-02 02:00:00',approvedAt:'2026-11-02 01:00:00'},{lastContactedAt:'2026-11-02 02:00:00'}])assert.ok(blockReason({...ready,...change}));
+  for(const change of [{consentStatus:'unreviewed'},{evidence:''},{purpose:''},{source:''},{country:'OTHER'},{suppressed:true},{accountDeletedAt:'2026-11-02 02:00:00'},{lastReplyAt:'2026-11-02 02:00:00',approvedAt:'2026-11-02 01:00:00'}])assert.ok(blockReason({...ready,...change}));
   assert.match(blockReason({...ready,hasProduct:true,validUntil:'2026-11-01'})!,/hết hiệu lực/);
   assert.match(blockReason({...ready,hasProduct:true,validUntil:'2099-12-31'})!,/nhóm đại lý/);
 });

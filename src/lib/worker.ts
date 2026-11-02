@@ -7,6 +7,7 @@ import {deliveryFailure} from './smtp';
 import {DIRECT_SCHEDULED_BLOCK_SQL} from './direct-mail-conflicts';
 import {sendOAuth,syncMailbox} from './oauth';
 import {appOrigin} from './app-url';
+import {templateHistory,templateHistoryReason,templateIdentity} from './template-history';
 
 export async function claimRecipient(recipientId:string){
   return transaction(async db=>{
@@ -20,22 +21,28 @@ export async function claimRecipient(recipientId:string){
     if(directConflict)reason='Email này đang có lượt gửi trực tiếp hoạt động hoặc cần đối soát.';
     if(!['scheduled','running'].includes(campaign.status)||!campaign.approvedAt||campaign.productVersion!==(product?.version??null)||campaign.templateVersion!==template.version)reason='Nội dung hoặc trạng thái duyệt đã thay đổi.';
     if(!sender||contact.ownerId!==campaign.ownerId)reason='Người phụ trách đã thay đổi hoặc ngừng hoạt động.';
+    const identity=templateIdentity(campaign.subject||'',(r.step>0?campaign.followupBody:campaign.body)||'',campaign.templateId,r.step);
+    const history=await templateHistory([contact.email],identity,db,{kind:'campaign',id:r.id});
+    reason=reason||templateHistoryReason(history.get(contact.email),!!campaign.allowTemplateResend);
     let content:null|{subject:string;body:string}=null;
     try{content=renderMail(campaign.subject,r.step>0?campaign.followupBody:campaign.body,contact,product||null,sender?.name||'');}catch(error){reason=(error as Error).message;}
     if(reason||!content){await run("UPDATE campaign_recipients SET status='skipped',error=? WHERE id=?",[reason||'Nội dung không hợp lệ',r.id],db);return null;}
     const messageId=`<${r.id}@${new URL(appOrigin()).hostname}>`;
-    await run("UPDATE campaign_recipients SET status='sending',attempts=attempts+1,claimedAt=UTC_TIMESTAMP(3),messageId=?,renderedSubject=?,renderedBody=?,error=NULL WHERE id=?",[messageId,content.subject,content.body,r.id],db);
+    await run("UPDATE campaign_recipients SET status='sending',attempts=attempts+1,claimedAt=UTC_TIMESTAMP(3),messageId=?,renderedSubject=?,renderedBody=?,emailSnapshot=?,templateKey=?,contentKey=?,error=NULL WHERE id=?",[messageId,content.subject,content.body,contact.email,identity.templateKey,identity.contentKey,r.id],db);
     await run("UPDATE campaigns SET status='running' WHERE id=?",[campaign.id],db);
     return {r,campaign,contact,content,messageId,sender};
   });
 }
 
 export async function recipientDispatchBlockReason(recipientId:string,ownerId:string){
-  const [gate]=await rows(`SELECT c.*,a.tier,a.ownerId,a.deletedAt accountDeletedAt,(SELECT COUNT(*) FROM suppressions s WHERE s.email=c.email) blocked,p.recipientPolicy,p.status,p.approvedAt,p.productId,p.productVersion,p.templateVersion,pr.version currentProductVersion,t.version currentTemplateVersion,pr.validUntil,pr.tier productTier,u.active FROM contacts c JOIN accounts a ON a.id=c.accountId JOIN campaign_recipients r ON r.contactId=c.id JOIN campaigns p ON p.id=r.campaignId LEFT JOIN products pr ON pr.id=p.productId JOIN templates t ON t.id=p.templateId JOIN users u ON u.id=p.ownerId WHERE r.id=?`,[recipientId]);
+  const [gate]=await rows(`SELECT c.*,a.tier,a.ownerId,a.deletedAt accountDeletedAt,(SELECT COUNT(*) FROM suppressions s WHERE s.email=c.email) blocked,p.recipientPolicy,p.status,p.approvedAt,p.productId,p.productVersion,p.templateVersion,p.templateId,p.subject,p.body,p.followupBody,p.allowTemplateResend,r.step deliveryStep,pr.version currentProductVersion,t.version currentTemplateVersion,pr.validUntil,pr.tier productTier,u.active FROM contacts c JOIN accounts a ON a.id=c.accountId JOIN campaign_recipients r ON r.contactId=c.id JOIN campaigns p ON p.id=r.campaignId LEFT JOIN products pr ON pr.id=p.productId JOIN templates t ON t.id=p.templateId JOIN users u ON u.id=p.ownerId WHERE r.id=?`,[recipientId]);
   if(!gate)return 'Không tìm thấy dữ liệu lượt gửi.';
   const [stop]=await rows("SELECT value FROM settings WHERE settingKey='emergency_stop'");
   const policy=blockReason({recipientPolicy:gate.recipientPolicy,hasProduct:Boolean(gate.productId),accountDeletedAt:gate.accountDeletedAt,consentStatus:gate.consentStatus,evidence:gate.consentEvidence,purpose:gate.consentPurpose,country:gate.country,suppressed:Boolean(gate.blocked),source:gate.source,validUntil:gate.validUntil||'',tier:gate.tier,productTier:gate.productTier||'',lastReplyAt:gate.lastReplyAt,approvedAt:gate.approvedAt,lastContactedAt:gate.lastContactedAt});
   if(policy)return policy;
+  const history=await templateHistory([gate.email],templateIdentity(gate.subject||'',(gate.deliveryStep>0?gate.followupBody:gate.body)||'',gate.templateId,gate.deliveryStep),undefined,{kind:'campaign',id:recipientId});
+  const templateReason=templateHistoryReason(history.get(gate.email),!!gate.allowTemplateResend);
+  if(templateReason)return templateReason;
   const [directConflict]=await rows(`SELECT r.id FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.email=? AND ${DIRECT_SCHEDULED_BLOCK_SQL} LIMIT 1`,[gate.email]);
   if(directConflict)return 'Email này đang có lượt gửi trực tiếp hoạt động hoặc cần đối soát.';
   const [accountReply]=await rows('SELECT id FROM contacts WHERE accountId=? AND lastReplyAt>=? LIMIT 1',[gate.accountId,gate.approvedAt]);

@@ -9,6 +9,8 @@ import {sendOAuth} from './oauth';
 import type {DirectMailInput} from './direct-mail-schema';
 import {DIRECT_ACTIVE_SQL,type MailConflict} from './direct-mail-conflicts';
 import {appOrigin} from './app-url';
+import {templateIdentity,templateHistory,templateHistoryReason} from './template-history';
+import type {PoolConnection} from 'mysql2/promise';
 
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const DIRECT_QUEUE_LOCK='mailtemp_direct_queue';
@@ -50,15 +52,18 @@ export async function previewDirectMail(user:User,input:DirectMailInput,db?:DB){
   const contacts=await contactsFor(input.contactIds,db);
   if(contacts.length!==input.contactIds.length)throw new HttpError(409,'Một số liên hệ không còn tồn tại. Hãy chọn lại danh sách.');
   if(user.role!=='admin'&&contacts.some(c=>c.ownerId!==user.id))throw new HttpError(403,'Danh sách có liên hệ thuộc sale khác.');
+  if(input.templateId&&!(await rows('SELECT id FROM templates WHERE id=?',[input.templateId],db)).length)throw new HttpError(409,'Mẫu thư đã chọn không còn tồn tại.');
+  const identity=templateIdentity(input.subject,input.body,input.templateId);
+  const history=await templateHistory(contacts.map(c=>String(c.email)),identity,db);
   const emails=contacts.map(c=>normalizeEmail(c.email)),marks=emails.map(()=>'?').join(',');
   const conflicts=await rows(`SELECT 'direct' kind,b.id batchId,b.name batchName,b.ownerId,r.email,r.status FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.email IN (${marks}) AND ${DIRECT_ACTIVE_SQL}
     UNION ALL SELECT 'campaign' kind,p.id batchId,p.name batchName,p.ownerId,c.email,r.status FROM campaign_recipients r JOIN campaigns p ON p.id=r.campaignId JOIN contacts c ON c.id=r.contactId WHERE c.email IN (${marks}) AND (r.status IN ('sending','unknown') OR (r.status='pending' AND p.status IN ('approved','scheduled','running','paused'))) ORDER BY batchId`,[...emails,...emails],db);
   const grants=await rows(`SELECT r.id,r.email FROM direct_mail_recipients r WHERE r.email IN (${marks}) AND r.status='unknown' AND r.retryAuthorizedAt IS NOT NULL AND r.retryConsumedBy IS NULL ORDER BY r.id`,emails,db);
   const recipients=contacts.map(c=>{
-    let reason=contactReason(c,{...input,ownerId},product),preview:null|{subject:string;body:string}=null;
+    let reason=contactReason(c,{...input,ownerId},product)||templateHistoryReason(history.get(normalizeEmail(c.email)),input.allowTemplateResend),preview:null|{subject:string;body:string}=null;
     try{preview=renderMail(input.subject,input.body,c,product,sender.name);}catch(e){reason=(e as Error).message;}
     const blockers:MailConflict[]=conflicts.filter(r=>normalizeEmail(r.email)===normalizeEmail(c.email)).map(r=>{const canManage=user.role==='admin'||r.ownerId===user.id;return {kind:r.kind,batchId:canManage?r.batchId:null,batchName:canManage?r.batchName:'Lượt gửi của sale khác',email:r.email,status:r.status,canManage};});
-    return {id:c.id,email:c.email,name:c.name,accountName:c.accountName,consentStatus:c.consentStatus,reason,preview,conflicts:blockers,retryAuthorizationIds:grants.filter(r=>normalizeEmail(r.email)===normalizeEmail(c.email)).map(r=>r.id)};
+    return {id:c.id,email:c.email,name:c.name,accountName:c.accountName,consentStatus:c.consentStatus,previouslySent:history.get(normalizeEmail(c.email))==='accepted',reason,preview,conflicts:blockers,retryAuthorizationIds:grants.filter(r=>normalizeEmail(r.email)===normalizeEmail(c.email)).map(r=>r.id)};
   });
   const gate=await sendingGate(ownerId,db);
   const [box]=await rows('SELECT provider,email FROM mailboxes WHERE userId=?',[ownerId],db);
@@ -69,10 +74,12 @@ export async function previewDirectMail(user:User,input:DirectMailInput,db?:DB){
 }
 export async function startDirectMail(user:User,input:DirectMailInput,requestId:string,previewToken:string,acceptExclusions:boolean,acceptDuplicateRisk=false){
   const ownerId=user.role==='admin'?(input.ownerId||user.id):user.id,payloadHash=digest({...input,ownerId,acceptDuplicateRisk});
+  const {templateId:_templateId,allowTemplateResend:_allowTemplateResend,...legacyInput}=input;
+  const legacyHash=!_templateId&&!_allowTemplateResend?digest({...legacyInput,ownerId,acceptDuplicateRisk}):null;
   const existing=async(db?:DB)=>{
     const [batch]=await rows('SELECT id,payloadHash FROM direct_mail_batches WHERE ownerId=? AND requestId=?',[ownerId,requestId],db);
     if(!batch)return null;
-    if(batch.payloadHash!==payloadHash)throw new HttpError(409,'Mã xác nhận đã dùng cho nội dung khác. Hãy kiểm tra lại.');
+    if(batch.payloadHash!==payloadHash&&batch.payloadHash!==legacyHash)throw new HttpError(409,'Mã xác nhận đã dùng cho nội dung khác. Hãy kiểm tra lại.');
     return {id:batch.id,alreadyStarted:true};
   };
   if(user.role!=='admin'&&input.ownerId&&input.ownerId!==user.id)throw new HttpError(403,'Không có quyền gửi thay sale khác.');
@@ -88,7 +95,8 @@ export async function startDirectMail(user:User,input:DirectMailInput,requestId:
     if(preview.blocked&&!acceptExclusions)throw new HttpError(409,'Xác nhận bỏ qua danh sách không đạt trước khi gửi.');
     if(preview.retryCount&&!acceptDuplicateRisk)throw new HttpError(409,'Cần xác nhận nguy cơ nhận trùng khi sử dụng quyền gửi lại.');
     const id=randomUUID();
-    await run('INSERT INTO direct_mail_batches(id,ownerId,requestId,payloadHash,name,subject,body,recipientPolicy,productSnapshot,senderName,createdAt) VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))',[id,ownerId,requestId,payloadHash,input.name,input.subject,input.body,input.recipientPolicy,preview.product?JSON.stringify(preview.product):null,preview.senderName],db);
+    const identity=templateIdentity(input.subject,input.body,input.templateId);
+    await run('INSERT INTO direct_mail_batches(id,ownerId,requestId,payloadHash,name,subject,body,recipientPolicy,productSnapshot,senderName,templateId,templateKey,contentKey,allowTemplateResend,createdAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))',[id,ownerId,requestId,payloadHash,input.name,input.subject,input.body,input.recipientPolicy,preview.product?JSON.stringify(preview.product):null,preview.senderName,input.templateId,identity.templateKey,identity.contentKey,input.allowTemplateResend],db);
     for(const r of preview.recipients){
       const recipientId=randomUUID();
       await run('INSERT INTO direct_mail_recipients(id,batchId,contactId,email,accountName,status,error) VALUES (?,?,?,?,?,?,?)',[recipientId,id,r.id,normalizeEmail(r.email),r.accountName,r.reason?'skipped':'pending',r.reason],db);
@@ -97,7 +105,7 @@ export async function startDirectMail(user:User,input:DirectMailInput,requestId:
         if(consumed.affectedRows!==1)throw new HttpError(409,'Quyền gửi lại đã thay đổi hoặc được sử dụng. Hãy kiểm tra lại.');
       }
     }
-    await audit(user.id,'direct_mail_started','direct_mail',id,{eligible:preview.eligible,excluded:preview.blocked,recipientPolicy:input.recipientPolicy},db);
+    await audit(user.id,'direct_mail_started','direct_mail',id,{eligible:preview.eligible,excluded:preview.blocked,recipientPolicy:input.recipientPolicy,templateId:input.templateId,allowTemplateResend:input.allowTemplateResend},db);
     await notify(ownerId,'Đã bắt đầu gửi trực tiếp',input.name,'info',db);
     return {id,alreadyStarted:false};
   });}catch(e){if((e as {code?:string}).code==='ER_DUP_ENTRY'){const duplicate=await existing();if(duplicate)return duplicate;}throw e;}
@@ -179,7 +187,9 @@ export async function dispatchDirectRecipient(recipientId:string,send:DirectSend
     await rows('SELECT a.id FROM accounts a JOIN contacts c ON c.accountId=a.id WHERE c.id=? FOR UPDATE',[r.contactId],db);
     const [c]=await contactsFor([r.contactId],db,batch.id),[owner]=await rows('SELECT active FROM users WHERE id=?',[batch.ownerId],db);
     const product=productSnapshot(batch.productSnapshot);
-    let reason=c?contactReason(c,{ownerId:batch.ownerId,recipientPolicy:batch.recipientPolicy} as DirectMailInput,product):'Liên hệ đã bị xóa.';
+    const identity=templateIdentity(batch.subject,batch.body,batch.templateId);
+    const history=await templateHistory([r.email],identity,db,{kind:'direct',id:r.id});
+    let reason=c?contactReason(c,{ownerId:batch.ownerId,recipientPolicy:batch.recipientPolicy} as DirectMailInput,product)||templateHistoryReason(history.get(r.email),!!batch.allowTemplateResend):'Liên hệ đã bị xóa.';
     if(!owner?.active)reason='Sale gửi đã ngừng hoạt động.';
     if(c?.email!==r.email)reason='Địa chỉ email đã thay đổi sau khi xác nhận.';
     let content:null|{subject:string;body:string}=null;
@@ -195,8 +205,10 @@ export async function dispatchDirectRecipient(recipientId:string,send:DirectSend
     // Recheck refusal, ownership and stop controls after claim, immediately before network dispatch.
     const [batch]=await rows('SELECT status FROM direct_mail_batches WHERE id=?',[claim.batch.id]);
     const [c]=await contactsFor([claim.r.contactId],undefined,claim.batch.id);
+    const history=await templateHistory([claim.r.email],templateIdentity(claim.batch.subject,claim.batch.body,claim.batch.templateId),undefined,{kind:'direct',id:claim.r.id});
     const reason=await sendingGate(claim.batch.ownerId)||(!['queued','running'].includes(batch.status)?'Lượt gửi đã tạm dừng hoặc hủy.':null)||(!c?'Liên hệ đã bị xóa.':contactReason(c,{ownerId:claim.batch.ownerId,recipientPolicy:claim.batch.recipientPolicy} as DirectMailInput,productSnapshot(claim.batch.productSnapshot)))||(c.email!==claim.r.email?'Địa chỉ email đã thay đổi.':null);
-    if(reason){await run("UPDATE direct_mail_recipients SET status='skipped',error=? WHERE id=?",[reason,claim.r.id]);return false;}
+    const templateReason=templateHistoryReason(history.get(claim.r.email),!!claim.batch.allowTemplateResend);
+    if(reason||templateReason){await run("UPDATE direct_mail_recipients SET status='skipped',error=? WHERE id=?",[reason||templateReason,claim.r.id]);return false;}
     await send({ownerId:claim.batch.ownerId,senderName:claim.batch.senderName,email:claim.r.email,subject:claim.content.subject,body:claim.content.body,messageId:claim.messageId,contactId:claim.r.contactId});
     await transaction(async db=>{
       await run("UPDATE direct_mail_recipients SET status='accepted',sentAt=UTC_TIMESTAMP(3),error=NULL WHERE id=? AND status='sending'",[claim.r.id],db);
@@ -217,11 +229,13 @@ export async function finishDirectBatches(batchId?:string){
 }
 // One SMTP transaction (90s deadline) per invocation fits inside a 120s Function.
 // The five-minute abandoned-claim window also covers database work and shutdown.
-export async function runDirectQueue(options:{batchId?:string;send?:DirectSender}={}){
-  const lock=await pool().getConnection();
+export async function runDirectQueue(options:{batchId?:string;send?:DirectSender;lock?:PoolConnection}={}){
+  // A caller-owned, already-held lock lets DB tests isolate fixture batches from
+  // the live local timer. This is never accepted from an API request.
+  const lock=options.lock||await pool().getConnection();
   let acquired=false;
   try{
-    const [result]=await lock.query('SELECT GET_LOCK(?,0) acquired',[DIRECT_QUEUE_LOCK]);
+    const [result]=await lock.query(options.lock?'SELECT IS_USED_LOCK(?)=CONNECTION_ID() acquired':'SELECT GET_LOCK(?,0) acquired',[DIRECT_QUEUE_LOCK]);
     acquired=!!(result as {acquired:number}[])[0].acquired;
     if(!acquired)return {busy:true,processed:0,blocked:null};
     await run("INSERT INTO settings(settingKey,value) VALUES ('last_direct_worker_at',?) ON DUPLICATE KEY UPDATE value=VALUES(value)",[new Date().toISOString()]);
@@ -236,5 +250,5 @@ export async function runDirectQueue(options:{batchId?:string;send?:DirectSender
   }catch(error){
     await run("INSERT INTO settings(settingKey,value) VALUES ('direct_worker_status','Tiến trình gặp lỗi; tác vụ được giữ để khôi phục. Xem log máy chủ.') ON DUPLICATE KEY UPDATE value=VALUES(value)");
     throw error;
-  }finally{try{if(acquired)await lock.query('SELECT RELEASE_LOCK(?)',[DIRECT_QUEUE_LOCK]);}finally{lock.release();}}
+  }finally{if(!options.lock){try{if(acquired)await lock.query('SELECT RELEASE_LOCK(?)',[DIRECT_QUEUE_LOCK]);}finally{lock.release();}}}
 }

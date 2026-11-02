@@ -42,7 +42,7 @@ export async function applyAssistantDraft(user:User,id:string,payload:unknown){
       if(!template||(data.productId&&!product))throw new HttpError(409,'Tour hoặc mẫu thư không còn tồn tại.');
       const [conflict]=await rows(`SELECT r.id FROM campaign_recipients r JOIN campaigns p ON p.id=r.campaignId JOIN contacts c ON c.id=r.contactId WHERE c.accountId IN (${contacts.map(()=>'?').join(',')}) AND (r.status IN ('sending','unknown') OR (r.status='pending' AND p.status IN ('approved','scheduled','running','paused'))) LIMIT 1`,contacts.map(c=>c.accountId),db);
       if(conflict)throw new HttpError(409,'Đại lý đang có lượt gửi hoạt động hoặc cần đối soát.');
-      await run('INSERT INTO campaigns(id,name,ownerId,templateId,productId,recipientPolicy,followupBody,followupDays) VALUES (?,?,?,?,?,?,?,?)',[entityId,data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.followupBody,data.followupDays],db);
+      await run('INSERT INTO campaigns(id,name,ownerId,templateId,productId,recipientPolicy,allowTemplateResend,followupBody,followupDays) VALUES (?,?,?,?,?,?,?,?,?)',[entityId,data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.allowTemplateResend,data.followupBody,data.followupDays],db);
       for(const contactId of unique)await run('INSERT INTO campaign_recipients(id,campaignId,contactId) VALUES (?,?,?)',[randomUUID(),entityId,contactId],db);
     }
     await run("UPDATE ai_drafts SET status='applied',entityId=?,payload=?,appliedAt=UTC_TIMESTAMP(3) WHERE id=?",[entityId,JSON.stringify(draft.data),id],db);

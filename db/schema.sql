@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS templates (
 CREATE TABLE IF NOT EXISTS campaigns (
  id CHAR(36) PRIMARY KEY, name VARCHAR(200) NOT NULL, ownerId CHAR(36) NOT NULL,
  recipientPolicy VARCHAR(40) NOT NULL DEFAULT 'eligible_only',
+ allowTemplateResend BOOLEAN NOT NULL DEFAULT FALSE,
  templateId CHAR(36) NOT NULL, productId CHAR(36) NULL, status VARCHAR(40) NOT NULL DEFAULT 'draft',
  subject VARCHAR(500), body TEXT, templateVersion INT, productVersion INT, approvedBy CHAR(36), approvedAt DATETIME(3),
  scheduledAt DATETIME(3), followupBody TEXT, followupDays INT NOT NULL DEFAULT 4,
@@ -58,9 +59,10 @@ CREATE TABLE IF NOT EXISTS campaign_recipients (
  id CHAR(36) PRIMARY KEY, campaignId CHAR(36) NOT NULL, contactId CHAR(36) NOT NULL, step INT NOT NULL DEFAULT 0,
  status VARCHAR(30) NOT NULL DEFAULT 'pending', dueAt DATETIME(3), messageId VARCHAR(254),
  renderedSubject VARCHAR(500), renderedBody MEDIUMTEXT, attempts INT NOT NULL DEFAULT 0,
+ emailSnapshot VARCHAR(254), templateKey CHAR(64), contentKey CHAR(64),
  error VARCHAR(1000), sentAt DATETIME(3), claimedAt DATETIME(3), repliedAt DATETIME(3), deliveredAt DATETIME(3),
  createdAt TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
- UNIQUE(campaignId,contactId,step), UNIQUE(messageId), FOREIGN KEY(campaignId) REFERENCES campaigns(id), FOREIGN KEY(contactId) REFERENCES contacts(id), INDEX(status,dueAt)
+ UNIQUE(campaignId,contactId,step), UNIQUE(messageId), FOREIGN KEY(campaignId) REFERENCES campaigns(id), FOREIGN KEY(contactId) REFERENCES contacts(id), INDEX(status,dueAt), INDEX campaign_email_template(emailSnapshot,templateKey,status)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS suppressions (
  id CHAR(36) PRIMARY KEY, email VARCHAR(254) NOT NULL UNIQUE, reason VARCHAR(100) NOT NULL, actorId CHAR(36),
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS ai_drafts (
 CREATE TABLE IF NOT EXISTS direct_mail_batches (
  id CHAR(36) PRIMARY KEY, ownerId CHAR(36) NOT NULL, requestId CHAR(36) NOT NULL, payloadHash CHAR(64) NOT NULL,
  name VARCHAR(200) NOT NULL, subject VARCHAR(500) NOT NULL, body TEXT NOT NULL, recipientPolicy VARCHAR(40) NOT NULL,
+ templateId CHAR(36), templateKey CHAR(64), contentKey CHAR(64), allowTemplateResend BOOLEAN NOT NULL DEFAULT FALSE,
  productSnapshot JSON, senderName VARCHAR(120) NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'queued',
  createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), finishedAt DATETIME(3),
  UNIQUE(ownerId,requestId), FOREIGN KEY(ownerId) REFERENCES users(id), INDEX(status,createdAt)

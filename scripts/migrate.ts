@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import {pool,run} from '../src/lib/db';
 import {databasePoolOptions} from '../src/lib/db-config';
+import {backfillTemplateHistory} from '../src/lib/template-history';
 nextEnv.loadEnvConfig(process.cwd());
 let database: ReturnType<typeof pool> | undefined;
 let step='kiểm tra cấu hình';
@@ -30,6 +31,19 @@ try{
   }
   const [emailIndex]=await pool().query("SHOW INDEX FROM direct_mail_recipients WHERE Key_name='direct_email_status'");
   if(!(emailIndex as unknown[]).length)await pool().query('ALTER TABLE direct_mail_recipients ADD INDEX direct_email_status(email,status)');
+  step='cập nhật cột lịch sử mẫu thư';
+  for(const [table,columns] of Object.entries({
+    campaigns:[['allowTemplateResend','BOOLEAN NOT NULL DEFAULT FALSE']],
+    direct_mail_batches:[['templateId','CHAR(36) NULL'],['templateKey','CHAR(64) NULL'],['contentKey','CHAR(64) NULL'],['allowTemplateResend','BOOLEAN NOT NULL DEFAULT FALSE']],
+    campaign_recipients:[['emailSnapshot','VARCHAR(254) NULL'],['templateKey','CHAR(64) NULL'],['contentKey','CHAR(64) NULL']],
+  }))for(const [name,definition] of columns){
+    const [existing]=await pool().query(`SHOW COLUMNS FROM ${table} LIKE ?`,[name]);
+    if(!(existing as unknown[]).length)await pool().query(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+  }
+  const [historyIndex]=await pool().query("SHOW INDEX FROM campaign_recipients WHERE Key_name='campaign_email_template'");
+  if(!(historyIndex as unknown[]).length)await pool().query('ALTER TABLE campaign_recipients ADD INDEX campaign_email_template(emailSnapshot,templateKey,status)');
+  step='cập nhật lịch sử mẫu thư';
+  await backfillTemplateHistory();
   step='tạo tài khoản admin';
   if(process.env.ADMIN_PASSWORD){
     const inserted=await run('INSERT IGNORE INTO users(id,name,email,passwordHash,role) VALUES (?,?,?,?,?)',[randomUUID(),'Quản trị viên',process.env.ADMIN_EMAIL||'admin@mailtemp.local',await bcrypt.hash(process.env.ADMIN_PASSWORD,12),'admin']);

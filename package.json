@@ -16,6 +16,7 @@
     "test:account-delete": "tsx scripts/account-delete-test.ts",
     "test:direct-mail": "tsx scripts/direct-mail-test.ts",
     "test:direct-queue": "tsx scripts/direct-queue-test.ts",
+    "test:template-history": "tsx scripts/template-history-test.ts",
     "test:direct-conflicts": "tsx scripts/direct-conflicts-test.ts",
     "test:recipient-policy": "tsx scripts/recipient-policy-test.ts",
     "test:optional-product": "tsx scripts/optional-product-test.ts",

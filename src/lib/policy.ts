@@ -26,7 +26,6 @@ export function blockReason(input: PolicyInput) {
     if(input.tier!==input.productTier) return 'Bảng giá không đúng nhóm đại lý.';
   }
   if(input.lastReplyAt && input.approvedAt && new Date(input.lastReplyAt+'Z')>=new Date(input.approvedAt+'Z')) return 'Khách đã phản hồi sau khi duyệt.';
-  if(input.lastContactedAt && now.getTime()-new Date(input.lastContactedAt+'Z').getTime()<24*3600*1000) return 'Giới hạn nội bộ: cách lần gửi trước ít nhất 24 giờ.';
   return null;
 }
 export function escapeHtml(text:string) {return text.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));}

@@ -22,7 +22,8 @@ async function contact(accountId?:string,email?:string){
   const id=randomUUID();email=email||prefix.toLowerCase()+contactIds.length+'@example.invalid';contactIds.push(id);emailList.push(email);
   await run("INSERT INTO contacts(id,accountId,email,name,source,country) VALUES (?,?,?,?,?,'VN')",[id,accountId,email,'Fixture','QA website']);return {id,accountId,email};
 }
-const input=(ids:string[])=>({name:prefix,subject:'QA {{company_name}}',body:'QA {{contact_name}}',contactIds:ids});
+let directBody='QA {{contact_name}}';
+const input=(ids:string[])=>({name:prefix,subject:'QA {{company_name}}',body:directBody,contactIds:ids});
 async function preview(ids:string[]){return api('direct-mail/preview',input(ids));}
 async function start(ids:string[],risk=false){const draft=input(ids),p=await preview(ids);const result=await api('direct-mail',{input:draft,requestId:randomUUID(),previewToken:p.previewToken,acceptExclusions:true,acceptDuplicateRisk:risk});const [r]=await rows('SELECT id FROM direct_mail_recipients WHERE batchId=?',[result.id]);return {id:result.id,recipientId:r.id};}
 async function unknown(id:string){const batch=await start([id]);await dispatchDirectRecipient(batch.recipientId,async()=>{throw new Error('Fixture ambiguous provider outcome');});await finishDirectBatches();return batch;}
@@ -52,8 +53,8 @@ try{
   const one={...payload,acceptDuplicateRisk:true},two={...one,requestId:randomUUID()};const responses=await Promise.all([request('direct-mail',one),request('direct-mail',two)]);assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);const values=await Promise.all(responses.map(r=>r.json()));const winner=values[responses.findIndex(r=>r.status===200)];const winnerPayload=responses[0].status===200?one:two;const replay=await api('direct-mail',winnerPayload);assert.equal(replay.id,winner.id);assert.equal(replay.alreadyStarted,true);
   const [replacement]=await rows('SELECT id FROM direct_mail_recipients WHERE batchId=?',[winner.id]);assert.equal((await rows('SELECT retryConsumedBy FROM direct_mail_recipients WHERE id=?',[old.recipientId]))[0].retryConsumedBy,replacement.id);
   assert.equal((await request('direct-mail/'+old.id+'/authorize-retry',{recipientId:old.recipientId,reason,acceptDuplicateRisk:true},adminCookie)).status,409);
-  await Promise.all([dispatchDirectRecipient(replacement.id,async envelope=>{assert.equal(envelope.email,first.email);sends++;}),dispatchDirectRecipient(replacement.id,async()=>{sends++;})]);assert.equal(sends,1);await finishDirectBatches();assert.equal((await api('direct-mail/'+winner.id)).batch.status,'completed');assert.equal((await rows('SELECT status FROM direct_mail_recipients WHERE id=?',[old.recipientId]))[0].status,'unknown');assert.match((await preview([first.id])).recipients[0].reason,/24 giờ/);
-  pass('Concurrent starts consume the grant once; repeat request recovers the same batch; concurrent dispatch sends once and preserves cooldown');
+  await Promise.all([dispatchDirectRecipient(replacement.id,async envelope=>{assert.equal(envelope.email,first.email);sends++;}),dispatchDirectRecipient(replacement.id,async()=>{sends++;})]);assert.equal(sends,1);await finishDirectBatches();assert.equal((await api('direct-mail/'+winner.id)).batch.status,'completed');assert.equal((await rows('SELECT status FROM direct_mail_recipients WHERE id=?',[old.recipientId]))[0].status,'unknown');assert.match((await preview([first.id])).recipients[0].reason,/đã nhận mẫu/);
+  pass('Concurrent starts consume the grant once; repeat request recovers the same batch; concurrent dispatch sends once and preserves template history');
 
   const repeatContact=await contact(),repeatOld=await unknown(repeatContact.id);await grant(repeatOld);const repeatNew=await start([repeatContact.id],true);await dispatchDirectRecipient(repeatNew.recipientId,async()=>{throw new Error('Unknown again');});await finishDirectBatches();p=await preview([repeatContact.id]);assert.equal(p.eligible,0);assert.equal(p.recipients[0].conflicts[0].batchId,repeatNew.id);assert.equal(p.retryCount,0);
   pass('A replacement with unknown outcome blocks again; an earlier consumed grant cannot authorize another attempt');
@@ -61,7 +62,7 @@ try{
   const moved=await contact(),movedOld=await unknown(moved.id);const changedEmail=prefix.toLowerCase()+'-changed@example.invalid';emailList.push(changedEmail);await run('UPDATE contacts SET email=? WHERE id=?',[changedEmail,moved.id]);assert.equal((await preview([moved.id])).eligible,1);const restored=await contact(undefined,moved.email);p=await preview([restored.id]);assert.equal(p.eligible,0);assert.equal(p.recipients[0].conflicts[0].batchId,movedOld.id);
   pass('Historical snapshots keep locking their actual recipient email even after contact email or agency changes');
 
-  await run('UPDATE contacts SET lastContactedAt=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 2 DAY) WHERE id=?',[first.id]);
+  directBody='QA new content {{contact_name}}';
   const template=await api('templates',{name:prefix,subject:'QA {{company_name}}',body:'QA {{contact_name}}'});templateIds.push(template.id);
   const campaign=await api('campaigns',{name:prefix,templateId:template.id,productId:null,recipientPolicy:'include_unreviewed',contactIds:[sibling.id],followupBody:'',followupDays:4});campaignIds.push(campaign.id);let campaignPreview=await api('campaigns/'+campaign.id);assert.equal(campaignPreview.eligible,1);await api('campaigns/'+campaign.id,{action:'approve',acceptExclusions:true,previewToken:campaignPreview.previewToken},cookie,'PATCH');
   assert.equal((await preview([sibling.id])).eligible,0);assert.equal((await preview([first.id])).eligible,1);const differentEmail=await start([first.id]);

@@ -2,6 +2,8 @@ import {z} from 'zod';
 export const directMailSchema=z.object({
   name:z.string().trim().min(1).max(200),
   ownerId:z.uuid().optional(),
+  templateId:z.union([z.uuid(),z.literal('')]).nullish().transform(v=>v||null),
+  allowTemplateResend:z.boolean().default(false),
   subject:z.string().trim().min(1).max(400).refine(v=>!/[\r\n]/.test(v),'Tiêu đề không được xuống dòng.'),
   body:z.string().trim().min(1).max(20000),
   productId:z.union([z.uuid(),z.literal('')]).nullish().transform(v=>v||null),

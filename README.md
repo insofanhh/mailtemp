@@ -123,7 +123,7 @@ SMTP không đọc inbox. Mặc định worker giữ lượt gửi nếu chưa c
 
 - Thứ Hai–thứ Sáu, 08:00–17:00 giờ Việt Nam; cấu hình pilot cố định.
 - Mặc định 20 lượt/sale/24 giờ, tối đa cấu hình 100. Đây là giới hạn nội bộ, không phải cam kết hạn mức của Google/Microsoft.
-- Cách nhau tối thiểu 60 giây/sale; cùng contact cách ít nhất 24 giờ.
+- Cách nhau tối thiểu 60 giây/sale trong chiến dịch. Mỗi email chỉ nhận một lần cho mỗi mẫu thư; muốn lặp lại phải bật chế độ gửi lại cho lượt gửi/chiến dịch đó.
 - Mỗi lượt cron xử lý tối đa **một email**, giảm rủi ro vượt thời gian HTTP. Phù hợp hai sale hiện tại.
 - Không gửi khi giá hết hạn/sai tier, thiếu chứng cứ, bị chặn, approval cũ hoặc kết nối phản hồi lỗi.
 - Thị trường ngoài Việt Nam được giữ lại để cấu hình policy riêng.
@@ -306,7 +306,7 @@ Nhập chỉ có email: ghép cột Email liên hệ rồi xem trước và nh�
 
 ## Gửi mail trực tiếp
 
-Menu **Gửi mail trực tiếp** (`/?view=direct-mail`) cho phép tự soạn hoặc lấy nội dung từ mẫu, chọn chương trình tùy chọn, chọn tối đa 1.000 liên hệ, kiểm tra từng người nhận và xác nhận **Gửi ngay**. Mặc định bộ lọc bao gồm liên hệ chưa đánh giá; người gửi có thể chọn chỉ liên hệ đủ điều kiện. Các kiểm tra chặn, nguồn, quốc gia VN, bảng giá, quyền sở hữu và khoảng cách 24 giờ của liên hệ vẫn áp dụng. Hệ thống báo rõ xung đột với lượt gửi/chiến dịch đang hoạt động; hủy lượt chờ cũ trước khi tạo lượt mới để tránh gửi trùng.
+Menu **Gửi mail trực tiếp** (`/?view=direct-mail`) cho phép tự soạn hoặc lấy nội dung từ mẫu, chọn chương trình tùy chọn, chọn tối đa 1.000 liên hệ, kiểm tra từng người nhận và xác nhận **Gửi ngay**. Mặc định bộ lọc bao gồm liên hệ chưa đánh giá; người gửi có thể chọn chỉ liên hệ đủ điều kiện. Các kiểm tra chặn, nguồn, quốc gia VN, bảng giá, quyền sở hữu và kiểm tra mẫu đã gửi vẫn áp dụng. Hệ thống báo rõ xung đột với lượt gửi/chiến dịch đang hoạt động; hủy lượt chờ cũ trước khi tạo lượt mới để tránh gửi trùng.
 
 - Trên Vercel production, API lưu lượt gửi vào TiDB rồi phát tác vụ Vercel Queues. Consumer riêng xử lý một người nhận mỗi lần, phát tác vụ tiếp theo nếu còn người chờ. `vercel.json` đăng ký consumer private; SDK dùng OIDC tự động, không cần thêm khóa dịch vụ. TiDB và named lock quyết định quyền gửi, kể cả khi queue giao cùng tác vụ nhiều lần. Local/VPS vẫn dùng `server.ts` kiểm tra hàng đợi mỗi giây.
 - Cần MySQL/TiDB, SMTP hoặc OAuth và `MAIL_ENABLED=true`. Gửi trực tiếp không chờ giờ hành chính, không yêu cầu địa chỉ doanh nghiệp hay đồng bộ inbox và không áp dụng giới hạn pilot của chiến dịch. Giới hạn nhà cung cấp và dừng khẩn cấp vẫn áp dụng. Đóng trình duyệt không dừng gửi. Preview không phát tác vụ queue; dùng production để kiểm tra queue thực tế.
@@ -326,5 +326,13 @@ Menu **Gửi mail trực tiếp** (`/?view=direct-mail`) cho phép tự soạn h
 - Danh sách kiểm tra hiển thị tên lượt, email gây chặn, trạng thái và nút **Xem lượt đang chặn**. Hủy phần chờ hoặc đối soát sẽ cập nhật lại danh sách xem trước. Sale không được xem danh tính lượt của sale khác.
 - Quản trị viên có thể **Cho phép gửi lại một lần** cho một lượt `unknown`, nhập lý do tối thiểu 20 ký tự và xác nhận nguy cơ nhận trùng. Lượt cũ vẫn giữ `unknown`, Message-ID và nội dung lỗi; không tự ghi thành chưa gửi. Batch cũ chuyển `review_released` khi mọi lượt chưa xác định đã được mở khóa.
 - Quyền được lưu ở `retryAuthorizedAt`, `retryAuthorizedBy`, `retryReason`; khi tạo một lượt thay thế, `retryConsumedBy` trỏ đến người nhận mới. Người gửi phải xác nhận nguy cơ trùng lần nữa. Cập nhật quyền và tạo lượt mới nằm trong cùng transaction, không cho hai yêu cầu dùng cùng quyền. RequestId tiếp tục chống bấm lặp. Không tự gửi lại và không cho worker chiến dịch dùng quyền này.
-- Nếu lượt thay thế lại có kết quả `unknown`, nó tiếp tục chặn email đó và cần xử lý mới. Trạng thái accepted vẫn áp dụng khoảng cách liên hệ 24 giờ; việc mở khóa không bỏ qua danh sách chặn, quyền sale, email thay đổi hoặc các điều kiện nhận tin.
+- Nếu lượt thay thế lại có kết quả `unknown`, nó tiếp tục chặn email đó và cần xử lý mới. Trạng thái accepted được kiểm tra theo mẫu thư đã gửi; việc mở khóa không bỏ qua danh sách chặn, quyền sale, email thay đổi hoặc các điều kiện nhận tin.
 - Cập nhật database: `npm run db:migrate` (có thể chạy lại). Kiểm thử: `npm run test:direct-conflicts` dùng fixture, khóa hàng đợi thật, kiểm tra phạm vi email, metadata/quyền truy cập, mở khóa một lần, gửi đồng thời, lịch sử snapshot, xác nhận gửi và worker chiến dịch; không gọi SMTP/OAuth/cron.
+
+## Kiểm tra mẫu thư đã gửi
+
+- Thay giới hạn chờ 24 giờ của từng liên hệ bằng lịch sử **email + mẫu thư**, dùng chung cho gửi trực tiếp và chiến dịch, không hết hạn theo thời gian. Mẫu khác có thể gửi ngay khi đạt các điều kiện còn lại.
+- Mẫu được chọn từ danh sách nhận diện theo ID, kể cả sau khi sửa nội dung. Thư tự soạn nhận diện theo tiêu đề/nội dung đã chuẩn hóa xuống dòng và khoảng trắng đầu/cuối. Follow-up có nội dung riêng được kiểm tra riêng; nội dung trùng vẫn bị chặn.
+- **Cho phép gửi lại mẫu đã gửi** mặc định tắt, chỉ áp dụng cho lượt gửi hoặc chiến dịch đang soạn. Gửi trực tiếp tự tắt tùy chọn sau khi lưu lượt. Đổi chế độ của chiến dịch yêu cầu duyệt lại và chỉ thực hiện trước khi có lần xử lý đầu tiên.
+- Chế độ gửi lại bỏ chặn lịch sử `accepted`, vẫn giữ danh sách chặn, điều kiện nhận tin, chống bấm lặp và đối soát `unknown`. Lịch sử gửi cũ được backfill bởi `npm run db:migrate`; không xóa hoặc đặt lại số lần gửi.
+- Kiểm thử: `npm test`, `npm run test:template-history` (app và MySQL local; fixture có khóa queue và transport inject, không gửi email thật).

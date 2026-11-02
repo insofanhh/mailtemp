@@ -17,6 +17,7 @@ import {DIRECT_SCHEDULED_BLOCK_SQL} from '@/lib/direct-mail-conflicts';
 import {oauthStart,oauthCallback,syncMailbox} from '@/lib/oauth';
 import {appOrigin} from '@/lib/app-url';
 import {enqueueDirectBatch} from '@/lib/mail-queue';
+import {templateIdentity,templateHistory,templateHistoryReason} from '@/lib/template-history';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -34,7 +35,8 @@ async function campaignPreview(user:User,id:string,db?:Parameters<typeof rows>[2
   const conflicts=await rows("SELECT DISTINCT c.accountId FROM campaign_recipients r JOIN campaigns p ON p.id=r.campaignId JOIN contacts c ON c.id=r.contactId WHERE r.campaignId<>? AND c.accountId IN (SELECT c2.accountId FROM campaign_recipients r2 JOIN contacts c2 ON c2.id=r2.contactId WHERE r2.campaignId=?) AND (r.status IN ('sending','unknown') OR (r.status='pending' AND p.status IN ('approved','scheduled','running','paused')))",[id,id],db);
   const directConflicts=await rows(`SELECT DISTINCT r.email FROM direct_mail_recipients r JOIN direct_mail_batches b ON b.id=r.batchId WHERE r.email IN (SELECT c2.email FROM campaign_recipients r2 JOIN contacts c2 ON c2.id=r2.contactId WHERE r2.campaignId=?) AND ${DIRECT_SCHEDULED_BLOCK_SQL}`,[id],db);
   const conflictingAccounts=new Set(conflicts.map(c=>c.accountId)),directEmails=new Set(directConflicts.map(c=>normalizeEmail(c.email)));
-  const recipients=contacts.map(c=>{let reason=blockReason({recipientPolicy:campaign.recipientPolicy,hasProduct:Boolean(campaign.productId),accountDeletedAt:c.accountDeletedAt,consentStatus:c.consentStatus,evidence:c.consentEvidence,purpose:c.consentPurpose,country:c.country,suppressed:Boolean(c.suppressionId),source:c.source,validUntil:product?.validUntil||'',tier:c.tier,productTier:product?.tier||'',lastReplyAt:c.lastReplyAt,approvedAt:campaign.approvedAt,lastContactedAt:c.lastContactedAt});if(c.ownerId!==campaign.ownerId)reason='Đại lý đã chuyển người phụ trách.';let preview:null|{subject:string;body:string}=null;try{preview=renderMail(template.subject,template.body,c,product,sender.name);if(campaign.followupBody?.trim())renderMail(template.subject,campaign.followupBody,c,product,sender.name);}catch(e){reason=(e as Error).message;}if(conflictingAccounts.has(c.accountId)||directEmails.has(normalizeEmail(c.email)))reason='Đại lý đã có lượt gửi hoạt động hoặc cần đối soát trong chiến dịch khác.';if(!sender?.active)reason='Sale gửi đã ngừng hoạt động.';if(c.accountDeletedAt)reason='Đại lý đã bị xóa.';if(c.deliveryStatus!=='pending')reason=c.deliveryStatus==='skipped'?(c.deliveryError||'Lượt gửi đã được bỏ qua.'):'Lượt gửi đã được xử lý ('+c.deliveryStatus+').';return {id:c.id,name:c.name,email:c.email,accountName:c.accountName,consentStatus:c.consentStatus,reason,preview};});
+  const history=await templateHistory(contacts.map(c=>String(c.email)),templateIdentity(template.subject,template.body,campaign.templateId),db,undefined,'campaign');
+  const recipients=contacts.map(c=>{let reason=blockReason({recipientPolicy:campaign.recipientPolicy,hasProduct:Boolean(campaign.productId),accountDeletedAt:c.accountDeletedAt,consentStatus:c.consentStatus,evidence:c.consentEvidence,purpose:c.consentPurpose,country:c.country,suppressed:Boolean(c.suppressionId),source:c.source,validUntil:product?.validUntil||'',tier:c.tier,productTier:product?.tier||'',lastReplyAt:c.lastReplyAt,approvedAt:campaign.approvedAt,lastContactedAt:c.lastContactedAt})||templateHistoryReason(history.get(normalizeEmail(c.email)),!!campaign.allowTemplateResend);if(c.ownerId!==campaign.ownerId)reason='Đại lý đã chuyển người phụ trách.';let preview:null|{subject:string;body:string}=null;try{preview=renderMail(template.subject,template.body,c,product,sender.name);if(campaign.followupBody?.trim())renderMail(template.subject,campaign.followupBody,c,product,sender.name);}catch(e){reason=(e as Error).message;}if(conflictingAccounts.has(c.accountId)||directEmails.has(normalizeEmail(c.email)))reason='Đại lý đã có lượt gửi hoạt động hoặc cần đối soát trong chiến dịch khác.';if(!sender?.active)reason='Sale gửi đã ngừng hoạt động.';if(c.accountDeletedAt)reason='Đại lý đã bị xóa.';if(c.deliveryStatus!=='pending')reason=c.deliveryStatus==='skipped'?(c.deliveryError||'Lượt gửi đã được bỏ qua.'):'Lượt gửi đã được xử lý ('+c.deliveryStatus+').';return {id:c.id,name:c.name,email:c.email,accountName:c.accountName,consentStatus:c.consentStatus,reason,preview};});
   const previewToken=createHash('sha256').update(JSON.stringify({campaign,templateVersion:template.version,productVersion:product?.version,recipients})).digest('hex');
   return {campaign,product,template,recipients,previewToken,eligible:recipients.filter(c=>!c.reason).length,blocked:recipients.filter(c=>c.reason).length};
 }
@@ -113,7 +115,7 @@ async function handle(request:Request,context:Context){
     if(new Set(contacts.map(c=>c.accountId)).size!==contacts.length)throw new HttpError(409,'Pilot chỉ chọn một người liên hệ mỗi đại lý trong cùng chiến dịch.');
     const conflicts=await rows(`SELECT r.id FROM campaign_recipients r JOIN campaigns p ON p.id=r.campaignId JOIN contacts c ON c.id=r.contactId WHERE c.accountId IN (${contacts.map(()=>'?').join(',')}) AND (r.status IN ('sending','unknown') OR (r.status='pending' AND p.status IN ('approved','scheduled','running','paused'))) LIMIT 1`,contacts.map(c=>c.accountId));
     if(conflicts.length)throw new HttpError(409,'Đại lý đã có lượt gửi đang chờ hoặc chưa rõ kết quả trong chiến dịch khác.');
-    await transaction(async db=>{await run('INSERT INTO campaigns(id,name,ownerId,templateId,productId,recipientPolicy,followupBody,followupDays) VALUES (?,?,?,?,?,?,?,?)',[entityId,data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.followupBody,data.followupDays],db);for(const contactId of new Set(data.contactIds))await run('INSERT INTO campaign_recipients(id,campaignId,contactId) VALUES (?,?,?)',[randomUUID(),entityId,contactId],db);await audit(user.id,'campaign_created','campaign',entityId,{},db);await notify(ownerId,'Đã tạo chiến dịch nháp',data.name,'success',db);});return ok({id:entityId});
+    await transaction(async db=>{await run('INSERT INTO campaigns(id,name,ownerId,templateId,productId,recipientPolicy,allowTemplateResend,followupBody,followupDays) VALUES (?,?,?,?,?,?,?,?,?)',[entityId,data.name,ownerId,data.templateId,data.productId,data.recipientPolicy,data.allowTemplateResend,data.followupBody,data.followupDays],db);for(const contactId of new Set(data.contactIds))await run('INSERT INTO campaign_recipients(id,campaignId,contactId) VALUES (?,?,?)',[randomUUID(),entityId,contactId],db);await audit(user.id,'campaign_created','campaign',entityId,{},db);await notify(ownerId,'Đã tạo chiến dịch nháp',data.name,'success',db);});return ok({id:entityId});
   }
   if(resource==='campaigns'&&id&&method==='GET'){
     const preview=await campaignPreview(user,id);const recipients=await rows('SELECT r.*,c.email,c.name contactName FROM campaign_recipients r JOIN contacts c ON c.id=r.contactId WHERE r.campaignId=? ORDER BY r.step,c.email',[id]);return ok({...preview,delivery:recipients});
@@ -142,7 +144,7 @@ async function handle(request:Request,context:Context){
     await audit(user.id,'email_dns_checked','contact',id,{status});return ok({status,message:status==='mx_found'?'Tên miền có MX. Chưa xác minh hộp thư tồn tại hoặc quyền gửi.':status==='no_mx'?'Không tìm thấy MX. Cần kiểm tra địa chỉ trước khi gửi.':'Chưa xác định được DNS. Thử lại sau.'});
   }
   if(resource==='campaigns'&&id&&method==='PATCH'){
-    const campaign=await ownedCampaign(user,id);const data=z.object({action:z.enum(['approve','schedule','pause','cancel','recipient-policy']),recipientPolicy:z.enum(['eligible_only','include_unreviewed']).optional(),previewToken:z.string().length(64).optional(),acceptExclusions:z.boolean().default(false),scheduledAt:z.iso.datetime({offset:true}).optional()}).parse(await json(request));
+    const campaign=await ownedCampaign(user,id);const data=z.object({action:z.enum(['approve','schedule','pause','cancel','recipient-policy','template-resend']),recipientPolicy:z.enum(['eligible_only','include_unreviewed']).optional(),allowTemplateResend:z.boolean().optional(),previewToken:z.string().length(64).optional(),acceptExclusions:z.boolean().default(false),scheduledAt:z.iso.datetime({offset:true}).optional()}).parse(await json(request));
     await transaction(async db=>{
       if(data.action==='approve'){
         // Serialize campaigns targeting the same agencies before reading approval state.
@@ -151,7 +153,14 @@ async function handle(request:Request,context:Context){
         await rows('SELECT id FROM templates WHERE id=? FOR UPDATE',[campaign.templateId],db);
       }
       const current=await ownedCampaign(user,id,db,true);
-      if(data.action==='recipient-policy'){
+      if(data.action==='template-resend'){
+        if(data.allowTemplateResend===undefined)throw new HttpError(400,'Hãy chọn chế độ gửi lại.');
+        if(!['draft','approved','paused'].includes(current.status))throw new HttpError(409,'Tạm dừng chiến dịch trước khi đổi chế độ gửi lại.');
+        if((await rows('SELECT id FROM campaign_recipients WHERE campaignId=? AND (attempts>0 OR claimedAt IS NOT NULL) LIMIT 1',[id],db)).length)throw new HttpError(409,'Chiến dịch đã có lượt xử lý. Tạo chiến dịch mới để đổi chế độ gửi lại.');
+        await run("UPDATE campaigns SET allowTemplateResend=?,status='draft',approvedAt=NULL,approvedBy=NULL,scheduledAt=NULL WHERE id=?",[data.allowTemplateResend,id],db);
+        await run("UPDATE campaign_recipients SET status='pending',error=NULL,dueAt=NULL WHERE campaignId=? AND status='skipped' AND error LIKE 'Bộ lọc người nhận: %'",[id],db);
+        await audit(user.id,'campaign_template_resend_updated','campaign',id,{before:!!current.allowTemplateResend,after:data.allowTemplateResend},db);
+      }else if(data.action==='recipient-policy'){
         if(!data.recipientPolicy)throw new HttpError(400,'Hãy chọn điều kiện nhận tin.');
         if(!['draft','approved','paused'].includes(current.status))throw new HttpError(409,'Tạm dừng chiến dịch trước khi đổi điều kiện.');
         if((await rows("SELECT id FROM campaign_recipients WHERE campaignId=? AND (attempts>0 OR claimedAt IS NOT NULL) LIMIT 1",[id],db)).length)throw new HttpError(409,'Chiến dịch đã có lượt xử lý. Hãy tạo chiến dịch mới để đổi điều kiện.');
@@ -169,7 +178,7 @@ async function handle(request:Request,context:Context){
         // Validate follow-up variables during approval as well.
         if(current.followupBody?.trim())for(const recipient of preview.recipients.filter(r=>!r.reason))renderMail(preview.template.subject,current.followupBody,{name:recipient.name,accountName:recipient.accountName},preview.product,'Sale');
         for(const recipient of preview.recipients.filter(r=>r.reason))await run("UPDATE campaign_recipients SET status='skipped',error=? WHERE campaignId=? AND contactId=? AND step=0 AND status='pending'",['Bộ lọc người nhận: '+recipient.reason,id,recipient.id],db);
-        await audit(user.id,'campaign_recipients_approved','campaign',id,{recipientPolicy:current.recipientPolicy,eligible:preview.eligible,excluded:preview.blocked,previewToken:preview.previewToken},db);
+        await audit(user.id,'campaign_recipients_approved','campaign',id,{allowTemplateResend:!!current.allowTemplateResend,recipientPolicy:current.recipientPolicy,eligible:preview.eligible,excluded:preview.blocked,previewToken:preview.previewToken},db);
         await run("UPDATE campaigns SET status='approved',subject=?,body=?,templateVersion=?,productVersion=?,approvedBy=?,approvedAt=UTC_TIMESTAMP(3) WHERE id=?",[preview.template.subject,preview.template.body,preview.template.version,preview.product?.version??null,user.id,id],db);
       }else if(data.action==='schedule'){
         if(!['approved','paused'].includes(current.status)||!current.approvedAt)throw new HttpError(409,'Cần duyệt chiến dịch trước khi lên lịch.');
