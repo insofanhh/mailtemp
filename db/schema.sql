@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS direct_mail_batches (
  id CHAR(36) PRIMARY KEY, ownerId CHAR(36) NOT NULL, requestId CHAR(36) NOT NULL, payloadHash CHAR(64) NOT NULL,
  name VARCHAR(200) NOT NULL, subject VARCHAR(500) NOT NULL, body TEXT NOT NULL, recipientPolicy VARCHAR(40) NOT NULL,
  productSnapshot JSON, senderName VARCHAR(120) NOT NULL, status VARCHAR(30) NOT NULL DEFAULT 'queued',
- createdAt DATETIME(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)), finishedAt DATETIME(3),
+ createdAt DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), finishedAt DATETIME(3),
  UNIQUE(ownerId,requestId), FOREIGN KEY(ownerId) REFERENCES users(id), INDEX(status,createdAt)
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS direct_mail_recipients (

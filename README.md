@@ -17,6 +17,22 @@ MySQL phải đang chạy. `db:setup` dùng `MYSQL_ROOT_URL` để tạo databas
 
 Nếu database/user đã được cấp sẵn, chỉnh `DATABASE_URL`, đặt `ADMIN_EMAIL` và `ADMIN_PASSWORD` rồi chạy `npm run db:migrate`. Lệnh này không cần quyền tạo database/user. Các lệnh setup/migrate không thay mật khẩu admin đã tồn tại.
 
+### Tạo bảng và admin trên TiDB Cloud
+
+Trong TiDB SQL Editor, tạo database trước: `CREATE DATABASE IF NOT EXISTS mailtemp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`.
+
+Tạo tệp riêng `.env.tidb.local` (được Git bỏ qua), sao chép **URL kết nối thật** từ TiDB > Connect vào `DATABASE_URL`. Không để nguyên chữ mẫu `USERNAME` hoặc `PASSWORD`. Username Starter cần đầy đủ tiền tố instance, dạng `<prefix>.root`. Driver tự bật TLS xác thực chứng chỉ cho hostname `*.tidbcloud.com` nếu URL chưa có tham số `ssl`.
+
+Đặt thêm `ADMIN_EMAIL`, `ADMIN_PASSWORD` (ít nhất 12 ký tự), `MAIL_ENABLED=false` trong tệp này. Chạy bằng Node.js hỗ trợ `--env-file`:
+
+```powershell
+node --env-file=.env.tidb.local --import tsx scripts/migrate.ts
+```
+
+Chạy từ cửa sổ terminal mới, không có `DATABASE_URL`/`ADMIN_PASSWORD` cũ trong môi trường (biến môi trường hiện có được ưu tiên hơn env-file). Lệnh tạo 34 bảng, cập nhật schema và tạo admin nếu email chưa tồn tại. Không tự đổi mật khẩu tài khoản đã có. Kiểm tra trong TiDB: `SHOW TABLES FROM mailtemp;` và `SELECT email,role,active FROM mailtemp.users;`.
+
+Trên Vercel, `DATABASE_URL` phải trỏ cùng database. Thêm biến admin trên Vercel không tự chạy migration. Migration chạy từ máy phát triển kết nối trực tiếp TiDB; không gọi gửi mail. Cấu hình `.env.local` và MySQL local có thể giữ riêng.
+
 Chạy bản production trên máy chủ Node:
 
 ```powershell

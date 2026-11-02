@@ -87,7 +87,7 @@ export async function startDirectMail(user:User,input:DirectMailInput,requestId:
     if(preview.blocked&&!acceptExclusions)throw new HttpError(409,'Xác nhận bỏ qua danh sách không đạt trước khi gửi.');
     if(preview.retryCount&&!acceptDuplicateRisk)throw new HttpError(409,'Cần xác nhận nguy cơ nhận trùng khi sử dụng quyền gửi lại.');
     const id=randomUUID();
-    await run('INSERT INTO direct_mail_batches(id,ownerId,requestId,payloadHash,name,subject,body,recipientPolicy,productSnapshot,senderName) VALUES (?,?,?,?,?,?,?,?,?,?)',[id,ownerId,requestId,payloadHash,input.name,input.subject,input.body,input.recipientPolicy,preview.product?JSON.stringify(preview.product):null,preview.senderName],db);
+    await run('INSERT INTO direct_mail_batches(id,ownerId,requestId,payloadHash,name,subject,body,recipientPolicy,productSnapshot,senderName,createdAt) VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))',[id,ownerId,requestId,payloadHash,input.name,input.subject,input.body,input.recipientPolicy,preview.product?JSON.stringify(preview.product):null,preview.senderName],db);
     for(const r of preview.recipients){
       const recipientId=randomUUID();
       await run('INSERT INTO direct_mail_recipients(id,batchId,contactId,email,accountName,status,error) VALUES (?,?,?,?,?,?,?)',[recipientId,id,r.id,normalizeEmail(r.email),r.accountName,r.reason?'skipped':'pending',r.reason],db);

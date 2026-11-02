@@ -3,9 +3,21 @@ import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import {pool,run} from '../src/lib/db';
+import {databasePoolOptions} from '../src/lib/db-config';
 nextEnv.loadEnvConfig(process.cwd());
+let database: ReturnType<typeof pool> | undefined;
+let step='kiểm tra cấu hình';
 try{
-  for(const statement of readFileSync('db/schema.sql','utf8').split(';').map(s=>s.trim()).filter(Boolean))await pool().query(statement);
+  databasePoolOptions(process.env.DATABASE_URL);
+  if(process.env.ADMIN_PASSWORD && process.env.ADMIN_PASSWORD.length<12)throw new Error('ADMIN_PASSWORD cần ít nhất 12 ký tự. Chưa thay đổi database; hãy sửa mật khẩu rồi chạy lại.');
+  database=pool();
+  await database.query('SELECT 1');
+  console.log('Đã kết nối database. Đang cập nhật bảng...');
+  for(const statement of readFileSync('db/schema.sql','utf8').split(';').map(s=>s.trim()).filter(Boolean)){
+    step='tạo bảng '+(statement.match(/CREATE TABLE IF NOT EXISTS (\w+)/)?.[1]||'schema');
+    await database.query(statement);
+  }
+  step='cập nhật cột và index';
   const [columns]=await pool().query("SHOW COLUMNS FROM accounts LIKE 'deletedAt'");
   if(!(columns as unknown[]).length)await pool().query('ALTER TABLE accounts ADD COLUMN deletedAt DATETIME(3) NULL');
   const [policyColumns]=await pool().query("SHOW COLUMNS FROM campaigns LIKE 'recipientPolicy'");
@@ -18,7 +30,26 @@ try{
   }
   const [emailIndex]=await pool().query("SHOW INDEX FROM direct_mail_recipients WHERE Key_name='direct_email_status'");
   if(!(emailIndex as unknown[]).length)await pool().query('ALTER TABLE direct_mail_recipients ADD INDEX direct_email_status(email,status)');
-  if(process.env.ADMIN_PASSWORD&&process.env.ADMIN_PASSWORD.length>=12)await run('INSERT IGNORE INTO users(id,name,email,passwordHash,role) VALUES (?,?,?,?,?)',[randomUUID(),'Quản trị viên',process.env.ADMIN_EMAIL||'admin@mailtemp.local',await bcrypt.hash(process.env.ADMIN_PASSWORD,12),'admin']);
+  step='tạo tài khoản admin';
+  if(process.env.ADMIN_PASSWORD){
+    const inserted=await run('INSERT IGNORE INTO users(id,name,email,passwordHash,role) VALUES (?,?,?,?,?)',[randomUUID(),'Quản trị viên',process.env.ADMIN_EMAIL||'admin@mailtemp.local',await bcrypt.hash(process.env.ADMIN_PASSWORD,12),'admin']);
+    console.log(inserted.affectedRows?'Đã tạo tài khoản admin theo ADMIN_EMAIL.':'Email admin đã tồn tại; giữ nguyên tài khoản và mật khẩu hiện có.');
+  }else console.log('Chưa tạo admin vì thiếu ADMIN_PASSWORD. Đặt ADMIN_EMAIL và ADMIN_PASSWORD rồi chạy lại để tạo tài khoản.');
+  step='khởi tạo thiết lập';
   await run("INSERT IGNORE INTO settings(settingKey,value) VALUES ('daily_limit','20'),('signature','Đội ngũ kinh doanh du lịch'),('sender_address',''),('emergency_stop','false')");
-  console.log('Schema đã cập nhật. Admin chỉ được tạo nếu chưa tồn tại và có ADMIN_PASSWORD hợp lệ.');
-}finally{await pool().end();}
+  console.log('Schema đã cập nhật thành công.');
+}catch(error){
+  const code=(error as {code?:string}).code;
+  const messages:Record<string,string>={
+    ER_ACCESS_DENIED_ERROR:'TiDB/MySQL từ chối đăng nhập. Kiểm tra username đầy đủ và password trong DATABASE_URL.',
+    ER_BAD_DB_ERROR:'Database chưa tồn tại. Tạo database mailtemp trong TiDB SQL Editor rồi chạy lại.',
+    ER_PARSE_ERROR:'Cú pháp schema không tương thích với database. Cập nhật mã nguồn migration mới nhất rồi chạy lại.',
+    ENOTFOUND:'Không tìm thấy máy chủ database. Kiểm tra hostname trong DATABASE_URL.',
+    ETIMEDOUT:'Kết nối database hết thời gian chờ. Kiểm tra mạng và endpoint TiDB.',
+    ECONNREFUSED:'Máy chủ từ chối kết nối. Kiểm tra hostname và port database.'
+  };
+  const fallback=error instanceof Error?error.message:'Không thể chạy migration.';
+  const message=code?(messages[code]||`Migration thất bại (${code}). Kiểm tra kết nối và quyền tạo/cập nhật bảng.`):fallback;
+  console.error('Lỗi migration ('+step+'): '+message);
+  process.exitCode=1;
+}finally{if(database)await database.end();}

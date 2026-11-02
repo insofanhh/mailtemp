@@ -1,9 +1,9 @@
 import mysql, {type PoolConnection, type RowDataPacket, type ResultSetHeader} from 'mysql2/promise';
+import {databasePoolOptions} from './db-config';
 
 const globalDb = globalThis as unknown as { mailtempPool?: mysql.Pool };
 export function pool() {
-  if (!process.env.DATABASE_URL) throw new Error('Chưa cấu hình DATABASE_URL. Chạy npm run db:setup.');
-  if (!globalDb.mailtempPool) globalDb.mailtempPool = mysql.createPool({uri: process.env.DATABASE_URL, connectionLimit: 8, timezone: 'Z', dateStrings: true, decimalNumbers: true, charset: 'utf8mb4'});
+  if (!globalDb.mailtempPool) globalDb.mailtempPool = mysql.createPool(databasePoolOptions(process.env.DATABASE_URL));
   return globalDb.mailtempPool;
 }
 export type DB = mysql.Pool | PoolConnection;
