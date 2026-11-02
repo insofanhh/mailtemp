@@ -60,7 +60,7 @@ export async function runCron(){
     await run("UPDATE campaign_recipients SET status='unknown',error='Worker gián đoạn sau khi claim; cần đối soát, không tự gửi lại' WHERE status='sending' AND claimedAt<DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 5 MINUTE)");
     await run('DELETE FROM sessions WHERE expiresAt<UTC_TIMESTAMP(3)');await run('DELETE FROM oauth_states WHERE expiresAt<UTC_TIMESTAMP(3)');
     const boxes=await rows('SELECT userId FROM mailboxes ORDER BY COALESCE(lastSyncAt,\'2000-01-01\') LIMIT 2');
-    for(const box of boxes){if(Date.now()-started>7000)break;try{await syncMailbox(box.userId,Math.max(1000,8000-(Date.now()-started)));}catch{await run("UPDATE mailboxes SET lastError='Không đồng bộ được inbox. Sequence được giữ lại cho đến khi kết nối phục hồi.' WHERE userId=?",[box.userId]);}}
+    for(const box of boxes){if(Date.now()-started>7000)break;try{await syncMailbox(box.userId,Math.max(1000,8000-(Date.now()-started)));}catch{await run("UPDATE mailboxes SET lastError='Không đồng bộ được inbox. Sequence được giữ lại cho đến khi kết nối phục hồi.' WHERE userId=? AND provider<>'imap'",[box.userId]);}}
     const cfg=Object.fromEntries((await rows('SELECT settingKey,value FROM settings')).map(r=>[r.settingKey,r.value]));
     let blocked='';
     if(cfg.emergency_stop==='true')blocked='Đang dừng khẩn cấp.';
@@ -72,8 +72,8 @@ export async function runCron(){
         const candidates=await rows("SELECT r.id,r.campaignId,r.contactId,p.ownerId FROM campaign_recipients r JOIN campaigns p ON p.id=r.campaignId WHERE r.status='pending' AND r.dueAt<=UTC_TIMESTAMP(3) AND p.status IN ('scheduled','running') ORDER BY r.dueAt LIMIT 20");
         let selected:null|typeof candidates[number]=null;
         for(const candidate of candidates){
-          const [box]=await rows('SELECT lastSyncAt,lastError FROM mailboxes WHERE userId=?',[candidate.ownerId]);
-          if(!box&&!mailReady())continue;
+          const [box]=await rows('SELECT provider,lastSyncAt,lastError FROM mailboxes WHERE userId=?',[candidate.ownerId]);
+          if((!box||box.provider==='imap')&&!mailReady())continue;
           if(process.env.REPLY_SYNC_REQUIRED!=='false'){
             const last=box?.lastSyncAt||cfg['reply_sync_at:'+candidate.ownerId];
             const time=last?new Date(String(last).includes('T')?last:String(last)+'Z').getTime():0;
@@ -91,9 +91,9 @@ export async function runCron(){
           const dispatchReason=await recipientDispatchBlockReason(claim.r.id,claim.campaign.ownerId);
           if(dispatchReason){await run("UPDATE campaign_recipients SET status='skipped',error=? WHERE id=?",[dispatchReason,claim.r.id]);continue;}
           const content=await messageContent(claim.contact.id,claim.content.body);
-          const [box]=await rows('SELECT id FROM mailboxes WHERE userId=?',[claim.campaign.ownerId]);
-          if(box)await sendOAuth(claim.campaign.ownerId,claim.contact.email,claim.content.subject,content.text,claim.messageId,content.headers);
-          else await sendSmtpMail({from:{name:claim.sender.name,address:process.env.SMTP_FROM_EMAIL!},replyTo:process.env.SMTP_REPLY_TO||claim.sender.email,to:claim.contact.email,subject:claim.content.subject,messageId:claim.messageId,...content});
+          const [box]=await rows('SELECT id,provider,email FROM mailboxes WHERE userId=?',[claim.campaign.ownerId]);
+          if(box&&box.provider!=='imap')await sendOAuth(claim.campaign.ownerId,claim.contact.email,claim.content.subject,content.text,claim.messageId,content.headers);
+          else await sendSmtpMail({from:{name:claim.sender.name,address:process.env.SMTP_FROM_EMAIL!},replyTo:process.env.SMTP_REPLY_TO||box?.email||claim.sender.email,to:claim.contact.email,subject:claim.content.subject,messageId:claim.messageId,...content});
           await transaction(async db=>{
             await run("UPDATE campaign_recipients SET status='accepted',sentAt=UTC_TIMESTAMP(3) WHERE id=?",[claim.r.id],db);await run('UPDATE contacts SET lastContactedAt=UTC_TIMESTAMP(3) WHERE id=?',[claim.contact.id],db);
             await run("UPDATE accounts SET stage='contacted' WHERE id=? AND stage IN ('new','qualified','eligible')",[claim.contact.accountId],db);

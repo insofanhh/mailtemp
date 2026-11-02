@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
   poweredByHeader: false,
+  serverExternalPackages: ['imapflow','mailparser'],
   async headers() {
     return [{source: "/:path*", headers: [
       {key: "X-Content-Type-Options", value: "nosniff"},

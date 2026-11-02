@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "tsx server.ts --production",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -14,6 +14,7 @@
     "test": "tsx --test tests/*.test.ts",
     "test:bulk-delete": "tsx scripts/bulk-delete-test.ts",
     "test:account-delete": "tsx scripts/account-delete-test.ts",
+    "test:webmail": "tsx scripts/webmail-test.ts",
     "test:direct-mail": "tsx scripts/direct-mail-test.ts",
     "test:direct-queue": "tsx scripts/direct-queue-test.ts",
     "test:template-history": "tsx scripts/template-history-test.ts",
@@ -32,7 +33,9 @@
     "@vercel/queue": "^0.10.0",
     "bcryptjs": "^3.0.2",
     "fflate": "^0.8.3",
+    "imapflow": "^2.10.0",
     "lucide-react": "^0.468.0",
+    "mailparser": "^3.14.1",
     "mysql2": "^3.24.6",
     "next": "^16.4.3",
     "nodemailer": "^10.3.1",
@@ -45,6 +48,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.2",
     "@types/papaparse": "^5.3.0",

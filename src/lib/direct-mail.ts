@@ -25,7 +25,7 @@ async function sendingGate(ownerId:string,db?:DB){
   if(stop?.value==='true')return 'Hệ thống đang dừng khẩn cấp. Tắt dừng khẩn cấp để tiếp tục.';
   if(process.env.MAIL_ENABLED!=='true')return 'Dịch vụ gửi chưa bật (MAIL_ENABLED).';
   const [mailbox]=await rows('SELECT provider FROM mailboxes WHERE userId=?',[ownerId],db);
-  if(!mailbox&&!mailReady())return 'Chưa cấu hình SMTP hoặc kết nối hộp thư gửi.';
+  if(!['google','microsoft'].includes(mailbox?.provider)&&!mailReady())return 'Chưa cấu hình SMTP hoặc kết nối hộp thư gửi.';
   return null;
 }
 async function contactsFor(ids:string[],db?:DB,excludeBatch:string|null=null){
@@ -67,7 +67,7 @@ export async function previewDirectMail(user:User,input:DirectMailInput,db?:DB){
   });
   const gate=await sendingGate(ownerId,db);
   const [box]=await rows('SELECT provider,email FROM mailboxes WHERE userId=?',[ownerId],db);
-  const transport=box?box.provider+' · '+box.email:'SMTP · '+(process.env.SMTP_FROM_EMAIL||'chưa cấu hình');
+  const transport=box&&box.provider!=='imap'?box.provider+' · '+box.email:'SMTP · '+(process.env.SMTP_FROM_EMAIL||'chưa cấu hình');
   const eligible=recipients.filter(r=>!r.reason).length;
   return {recipients,eligible,blocked:recipients.length-eligible,retryCount:recipients.filter(r=>!r.reason&&r.retryAuthorizationIds.length).length,gate,transport,ownerId,product,senderName:sender.name,
     previewToken:digest({input,ownerId,senderName:sender.name,product,recipients,gate,transport})};
@@ -171,9 +171,9 @@ type DirectEnvelope={ownerId:string;senderName:string;email:string;subject:strin
 export type DirectSender=(envelope:DirectEnvelope)=>Promise<void>;
 async function sendDirect(envelope:DirectEnvelope){
   const content=await messageContent(envelope.contactId,envelope.body);
-  const [box]=await rows('SELECT id FROM mailboxes WHERE userId=?',[envelope.ownerId]);
-  if(box){await sendOAuth(envelope.ownerId,envelope.email,envelope.subject,content.text,envelope.messageId,content.headers);return;}
-  await sendSmtpMail({from:{name:envelope.senderName,address:process.env.SMTP_FROM_EMAIL!},replyTo:process.env.SMTP_REPLY_TO||process.env.SMTP_FROM_EMAIL,to:envelope.email,subject:envelope.subject,messageId:envelope.messageId,...content});
+  const [box]=await rows('SELECT id,provider,email FROM mailboxes WHERE userId=?',[envelope.ownerId]);
+  if(box&&box.provider!=='imap'){await sendOAuth(envelope.ownerId,envelope.email,envelope.subject,content.text,envelope.messageId,content.headers);return;}
+  await sendSmtpMail({from:{name:envelope.senderName,address:process.env.SMTP_FROM_EMAIL!},replyTo:process.env.SMTP_REPLY_TO||box?.email||process.env.SMTP_FROM_EMAIL,to:envelope.email,subject:envelope.subject,messageId:envelope.messageId,...content});
 }
 function productSnapshot(value:unknown):Record<string,string|number>|null{return !value?null:typeof value==='string'?JSON.parse(value):value as Record<string,string|number>;}
 // Injectable transport is only an in-process testing seam, never a client/API option.

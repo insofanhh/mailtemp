@@ -1,5 +1,7 @@
-import {createCipheriv,createDecipheriv,createHash,randomBytes,randomUUID} from 'node:crypto';
-import {rows,run,sqlDate} from './db';
+import {randomBytes,randomUUID} from 'node:crypto';
+import {encrypt,decrypt} from './credentials';
+import {syncWebmail} from './webmail';
+import {rows,run,sqlDate,transaction} from './db';
 import {HttpError,hash,type User} from './auth';
 import {processEvent} from './events';
 import type {RowDataPacket} from 'mysql2/promise';
@@ -7,9 +9,6 @@ import {appOrigin} from './app-url';
 
 type Provider='google'|'microsoft';
 type TokenResponse={access_token:string;refresh_token?:string;expires_in:number};
-function cipherKey(){const key=process.env.TOKEN_ENCRYPTION_KEY;if(!key||key.length<32)throw new Error('Thiếu TOKEN_ENCRYPTION_KEY.');return createHash('sha256').update(key).digest();}
-function encrypt(text:string){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',cipherKey(),iv);const data=Buffer.concat([cipher.update(text,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),data]).toString('base64');}
-function decrypt(text:string){const data=Buffer.from(text,'base64'),decipher=createDecipheriv('aes-256-gcm',cipherKey(),data.subarray(0,12));decipher.setAuthTag(data.subarray(12,28));return Buffer.concat([decipher.update(data.subarray(28)),decipher.final()]).toString('utf8');}
 export function oauthConfigured(provider:Provider){return Boolean(provider==='google'?process.env.GOOGLE_CLIENT_ID&&process.env.GOOGLE_CLIENT_SECRET:process.env.MICROSOFT_CLIENT_ID&&process.env.MICROSOFT_CLIENT_SECRET);}
 function config(provider:Provider){
   const tenant=encodeURIComponent(process.env.MICROSOFT_TENANT||'common');
@@ -28,18 +27,27 @@ export async function oauthCallback(provider:Provider,user:User,code:string,stat
   if(!consumed.affectedRows)throw new HttpError(400,'Phiên kết nối đã hết hạn hoặc không hợp lệ.');
   const cfg=config(provider),data:TokenResponse=await fetchJson(cfg.token,{method:'POST',body:new URLSearchParams({client_id:cfg.clientId,client_secret:cfg.secret,code,grant_type:'authorization_code',redirect_uri:redirectUri(provider)})});
   if(!data.refresh_token)throw new HttpError(409,'Nhà cung cấp không cấp refresh token. Hãy kết nối lại và cấp quyền offline.');
+  const refreshToken=data.refresh_token;
   const profile=await fetchJson(provider==='google'?'https://gmail.googleapis.com/gmail/v1/users/me/profile':'https://graph.microsoft.com/v1.0/me',{headers:{Authorization:'Bearer '+data.access_token}});
   const email=provider==='google'?profile.emailAddress:(profile.mail||profile.userPrincipalName);
-  await run('INSERT INTO mailboxes(id,userId,provider,email,accessToken,refreshToken,expiresAt) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE provider=VALUES(provider),email=VALUES(email),accessToken=VALUES(accessToken),refreshToken=VALUES(refreshToken),expiresAt=VALUES(expiresAt),lastSyncAt=NULL,lastError=NULL',[randomUUID(),user.id,provider,email,encrypt(data.access_token),encrypt(data.refresh_token),sqlDate(new Date(Date.now()+data.expires_in*1000))]);
+  await transaction(async db=>{
+    await rows('SELECT id FROM users WHERE id=? FOR UPDATE',[user.id],db);
+    const [existing]=await rows('SELECT provider FROM mailboxes WHERE userId=?',[user.id],db);
+    if(existing&&existing.provider!==provider)throw new HttpError(409,'Hãy ngắt kết nối hộp thư hiện tại trước khi đổi nhà cung cấp.');
+    await run('INSERT INTO mailboxes(id,userId,provider,email,accessToken,refreshToken,expiresAt) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE provider=VALUES(provider),email=VALUES(email),accessToken=VALUES(accessToken),refreshToken=VALUES(refreshToken),expiresAt=VALUES(expiresAt),lastSyncAt=NULL,lastError=NULL',[randomUUID(),user.id,provider,email,encrypt(data.access_token),encrypt(refreshToken),sqlDate(new Date(Date.now()+data.expires_in*1000))],db);
+  });
 }
 export async function accessToken(userId:string,signal?:AbortSignal):Promise<(RowDataPacket & {token:string})|null>{
   const [box]=await rows('SELECT * FROM mailboxes WHERE userId=?',[userId]);if(!box)return null;
+  if(!['google','microsoft'].includes(box.provider))throw new Error('Hộp thư này không dùng OAuth.');
   if(new Date(box.expiresAt+'Z').getTime()>Date.now()+60000)return {...box,token:decrypt(box.accessToken)};
   const cfg=config(box.provider),data:TokenResponse=await fetchJson(cfg.token,{method:'POST',signal,body:new URLSearchParams({client_id:cfg.clientId,client_secret:cfg.secret,refresh_token:decrypt(box.refreshToken),grant_type:'refresh_token'})});
   await run('UPDATE mailboxes SET accessToken=?,refreshToken=?,expiresAt=? WHERE id=?',[encrypt(data.access_token),data.refresh_token?encrypt(data.refresh_token):box.refreshToken,sqlDate(new Date(Date.now()+data.expires_in*1000)),box.id]);
   return {...box,token:data.access_token};
 }
-export async function syncMailbox(userId:string,budgetMs=12000){
+export async function syncMailbox(userId:string,budgetMs=18000){
+  const [provider]=await rows('SELECT provider FROM mailboxes WHERE userId=?',[userId]);
+  if(provider?.provider==='imap')return syncWebmail(userId,budgetMs);
   const deadline=Date.now()+budgetMs,signal=AbortSignal.timeout(budgetMs),syncStarted=sqlDate(new Date());
   const box=await accessToken(userId,signal);if(!box)return 0;
   let processed=0;

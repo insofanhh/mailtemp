@@ -15,11 +15,13 @@ import {directMailSchema,directStartSchema,directRetrySchema} from '@/lib/direct
 import {previewDirectMail,startDirectMail,directMailList,directMailDetails,controlDirectMail,reconcileDirectMail,authorizeDirectRetry} from '@/lib/direct-mail';
 import {DIRECT_SCHEDULED_BLOCK_SQL} from '@/lib/direct-mail-conflicts';
 import {oauthStart,oauthCallback,syncMailbox} from '@/lib/oauth';
+import {connectWebmail} from '@/lib/webmail';
 import {appOrigin} from '@/lib/app-url';
 import {enqueueDirectBatch} from '@/lib/mail-queue';
 import {templateIdentity,templateHistory,templateHistoryReason} from '@/lib/template-history';
 
 export const runtime='nodejs';
+export const maxDuration=120;
 export const dynamic='force-dynamic';
 type Context={params:Promise<{path:string[]}>};
 const ok=(data:unknown={ok:true})=>NextResponse.json(data,{headers:{'Cache-Control':'no-store'}});
@@ -69,7 +71,8 @@ async function handle(request:Request,context:Context){
     if(action==='callback'){const url=new URL(request.url);if(url.searchParams.has('error'))throw new HttpError(400,'Người dùng hoặc nhà cung cấp đã từ chối kết nối.');await oauthCallback(provider,user,url.searchParams.get('code')||'',url.searchParams.get('state')||'');await notify(user.id,'Đã kết nối hộp thư',provider,'success');return NextResponse.redirect(`${appOrigin()}/?view=settings`);}
   }
   if(resource==='mailbox'&&method==='POST'){
-    if(id==='sync'){await syncMailbox(user.id);return ok();}
+    if(id==='webmail'){return ok(await connectWebmail(user,await json(request)));}
+    if(id==='sync'){return ok({processed:await syncMailbox(user.id)});}
     if(id==='disconnect'){await run('DELETE FROM mailboxes WHERE userId=?',[user.id]);await audit(user.id,'mailbox_disconnected','user',user.id);return ok();}
   }
   if(resource==='accounts'&&method==='POST'){

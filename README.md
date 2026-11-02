@@ -336,3 +336,17 @@ Menu **Gửi mail trực tiếp** (`/?view=direct-mail`) cho phép tự soạn h
 - **Cho phép gửi lại mẫu đã gửi** mặc định tắt, chỉ áp dụng cho lượt gửi hoặc chiến dịch đang soạn. Gửi trực tiếp tự tắt tùy chọn sau khi lưu lượt. Đổi chế độ của chiến dịch yêu cầu duyệt lại và chỉ thực hiện trước khi có lần xử lý đầu tiên.
 - Chế độ gửi lại bỏ chặn lịch sử `accepted`, vẫn giữ danh sách chặn, điều kiện nhận tin, chống bấm lặp và đối soát `unknown`. Lịch sử gửi cũ được backfill bởi `npm run db:migrate`; không xóa hoặc đặt lại số lần gửi.
 - Kiểm thử: `npm test`, `npm run test:template-history` (app và MySQL local; fixture có khóa queue và transport inject, không gửi email thật).
+
+
+## Kết nối Webmail (IMAP)
+
+- Vào **Cài đặt → Kết nối & gửi email → Kết nối Webmail**. Nhập email, hostname IMAP, username và mật khẩu webmail. Hiện hỗ trợ IMAP SSL/TLS cổng 993 với chứng chỉ hợp lệ; lấy thông số từ **Configure Mail Client → Secure SSL/TLS Settings** của hosting.
+- Nút **Kiểm tra & kết nối** xác thực và mở INBOX ở chế độ chỉ đọc trước khi lưu. Mật khẩu mã hóa AES-256-GCM bằng `TOKEN_ENCRYPTION_KEY`; không đưa vào state/API trả về. Không đổi khóa mã hóa đang sử dụng nếu chưa kết nối lại các hộp thư.
+- Bấm **Đồng bộ ngay** để lấy phản hồi. Cron hiện có tiếp tục đồng bộ tự động. Lần đầu xét thư trong 7 ngày gần nhất; chỉ ghi nhận người gửi thuộc liên hệ của sale đang kết nối, không lấy thư gửi bởi chính hộp thư. Không thay đổi trạng thái đã đọc hoặc xóa thư trên máy chủ.
+- UID/UIDVALIDITY lưu tiến trình; Message-ID chống nhập trùng khi chạy lại. Mỗi lượt tối đa 200 thư, đọc tối đa 256 KiB/thư. Khi hết thời gian hoặc còn thư, lượt sau tiếp tục từ UID cuối; chưa báo đồng bộ hoàn tất để tránh gửi follow-up khi chưa kiểm tra hết phản hồi. Email phản hồi dừng follow-up và tạo công việc; thư tự động được xử lý riêng.
+- Webmail chỉ bổ sung nhận thư IMAP. Gửi vẫn dùng SMTP cấu hình trên máy chủ; `MAIL_ENABLED=true` và SMTP hợp lệ vẫn bắt buộc. Nếu không đặt `SMTP_REPLY_TO`, địa chỉ Webmail kết nối được dùng làm Reply-To. Cần cấu hình SMTP và hộp thư nhận phù hợp để khách trả lời đúng địa chỉ.
+- Mỗi người dùng kết nối một hộp thư. Muốn đổi tài khoản/nhà cung cấp, ngắt kết nối rồi kết nối lại. Ngắt kết nối xóa cả mật khẩu mã hóa và cursor, giữ lịch sử phản hồi đã ghi nhận.
+- Chạy `npm run db:migrate` trước bản mới để tạo bảng `webmail_connections` trên MySQL/TiDB. Không cần thêm biến môi trường IMAP hay OAuth client cho Webmail.
+- Kiểm thử: `npm test` và `npm run test:webmail` (database local, phiên IMAP giả lập trong tiến trình, không gửi email thật).
+
+Build dùng `next build --webpack` để tránh lỗi junction của Turbopack trên Windows với thư viện IMAP. Đây là tùy chọn chính thức của Next.js: https://nextjs.org/docs/app/guides/upgrading/version-16.
