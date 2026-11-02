@@ -3,6 +3,7 @@ export {mailReady,smtpTransport,sendSmtpMail} from './smtp';
 import {rows,run,type DB} from './db';
 import {audit,notify} from './activity';
 import {escapeHtml,interpolate,normalizeEmail} from './policy';
+import {appOrigin} from './app-url';
 
 export function unsubscribeToken(contactId:string) {
   const secret=process.env.UNSUBSCRIBE_SECRET;
@@ -35,7 +36,7 @@ export function renderMail(subject:string,body:string,contact:Record<string,stri
   return {subject:/^\[QC\]/i.test(renderedSubject)?renderedSubject:'[QC] '+renderedSubject,body:interpolate(body,values)};
 }
 export async function messageContent(contactId:string,body:string) {
-  const unsubscribe=`${process.env.APP_URL}/api/unsubscribe?token=${unsubscribeToken(contactId)}`;
+  const unsubscribe=`${appOrigin()}/api/unsubscribe?token=${unsubscribeToken(contactId)}`;
   const settings=await rows("SELECT settingKey,value FROM settings WHERE settingKey IN ('signature','sender_address')");
   const values=Object.fromEntries(settings.map(r=>[r.settingKey,r.value]));
   const text=body+`\n\n${values.signature||''}\n${values.sender_address||''}\nTừ chối nhận email: ${unsubscribe}`;

@@ -15,6 +15,7 @@ import {directMailSchema,directStartSchema,directRetrySchema} from '@/lib/direct
 import {previewDirectMail,startDirectMail,directMailList,directMailDetails,controlDirectMail,reconcileDirectMail,authorizeDirectRetry} from '@/lib/direct-mail';
 import {DIRECT_SCHEDULED_BLOCK_SQL} from '@/lib/direct-mail-conflicts';
 import {oauthStart,oauthCallback,syncMailbox} from '@/lib/oauth';
+import {appOrigin} from '@/lib/app-url';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -62,7 +63,7 @@ async function handle(request:Request,context:Context){
   if(resource==='state'&&method==='GET')return ok(await workspace(user));
   if(resource==='oauth'&&['google','microsoft'].includes(id)&&method==='GET'){
     const provider=id as 'google'|'microsoft';if(action==='start')return NextResponse.redirect(await oauthStart(provider,user));
-    if(action==='callback'){const url=new URL(request.url);if(url.searchParams.has('error'))throw new HttpError(400,'Người dùng hoặc nhà cung cấp đã từ chối kết nối.');await oauthCallback(provider,user,url.searchParams.get('code')||'',url.searchParams.get('state')||'');await notify(user.id,'Đã kết nối hộp thư',provider,'success');return NextResponse.redirect(`${process.env.APP_URL}/?view=settings`);}
+    if(action==='callback'){const url=new URL(request.url);if(url.searchParams.has('error'))throw new HttpError(400,'Người dùng hoặc nhà cung cấp đã từ chối kết nối.');await oauthCallback(provider,user,url.searchParams.get('code')||'',url.searchParams.get('state')||'');await notify(user.id,'Đã kết nối hộp thư',provider,'success');return NextResponse.redirect(`${appOrigin()}/?view=settings`);}
   }
   if(resource==='mailbox'&&method==='POST'){
     if(id==='sync'){await syncMailbox(user.id);return ok();}

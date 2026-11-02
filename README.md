@@ -154,6 +154,8 @@ Token được mã hóa AES-256-GCM trong database, refresh token không đượ
 
 Trước tiên deploy lên tên miền HTTPS công khai, cập nhật `APP_URL` đúng origin, không có dấu `/` cuối. Dịch vụ bên ngoài không truy cập được localhost.
 
+Trên Vercel, đặt `APP_URL` bằng domain chính thức (ví dụ `https://mailtemp-ten.vercel.app`) và redeploy sau khi sửa Environment Variables. Ứng dụng chấp nhận chính xác các domain từ `APP_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_URL`, `VERCEL_BRANCH_URL` khi chạy trên Vercel; không dùng wildcard `*.vercel.app`, không tin `Host`/`X-Forwarded-Host` do client gửi. Bật **System Environment Variables** nếu muốn tự nhận domain Vercel. Khi `APP_URL` thiếu, sai định dạng hoặc vẫn trỏ localhost trên Vercel, các liên kết ứng dụng dùng domain production do Vercel cung cấp. Lỗi đăng nhập `Yêu cầu không cùng nguồn` là lỗi domain/Origin trước bước kiểm tra mật khẩu; không cần tạo lại admin hoặc database.
+
 Trong cron-job.org tạo một job:
 
 | Trường | Giá trị |

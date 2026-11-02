@@ -8,6 +8,7 @@ import {deliveryFailure} from './smtp';
 import {sendOAuth} from './oauth';
 import type {DirectMailInput} from './direct-mail-schema';
 import {DIRECT_ACTIVE_SQL,type MailConflict} from './direct-mail-conflicts';
+import {appOrigin} from './app-url';
 
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 export const DIRECT_QUEUE_LOCK='mailtemp_direct_queue';
@@ -180,7 +181,7 @@ export async function dispatchDirectRecipient(recipientId:string,send:DirectSend
     let content:null|{subject:string;body:string}=null;
     try{if(c)content=renderMail(batch.subject,batch.body,c,product,batch.senderName);}catch(e){reason=(e as Error).message;}
     if(reason||!content){await run("UPDATE direct_mail_recipients SET status='skipped',error=? WHERE id=?",[reason||'Nội dung không hợp lệ.',r.id],db);return null;}
-    const messageId=`<direct-${r.id}@${new URL(process.env.APP_URL||'http://localhost:3000').hostname}>`;
+    const messageId=`<direct-${r.id}@${new URL(appOrigin()).hostname}>`;
     await run("UPDATE direct_mail_recipients SET status='sending',attempts=attempts+1,claimedAt=UTC_TIMESTAMP(3),messageId=?,renderedSubject=?,renderedBody=? WHERE id=?",[messageId,content.subject,content.body,r.id],db);
     await run("UPDATE direct_mail_batches SET status='running' WHERE id=?",[batch.id],db);
     return {r,batch,c,content,messageId};

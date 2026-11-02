@@ -1,4 +1,5 @@
 import {rows} from './db';
+import {appOrigin} from './app-url';
 import {mailReady} from './mail';
 import {oauthConfigured} from './oauth';
 import type {User} from './auth';
@@ -23,5 +24,5 @@ export async function workspace(user:User){
     admin?rows('SELECT * FROM cron_runs ORDER BY startedAt DESC LIMIT 10'):Promise.resolve([]),
     rows(`SELECT * FROM import_batches ${admin?'':'WHERE actorId=?'} ORDER BY createdAt DESC LIMIT 20`,args)
   ]);
-  return {serverTime:new Date().toISOString(),user,accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings:Object.fromEntries(settings.map(s=>[s.settingKey,s.value])),mailboxes,cronRuns,imports,infrastructure:{smtpConfigured:Boolean(process.env.SMTP_HOST&&process.env.SMTP_FROM_EMAIL),smtpEnabled:mailReady(),mailEnabled:process.env.MAIL_ENABLED==='true',googleConfigured:oauthConfigured('google'),microsoftConfigured:oauthConfigured('microsoft'),appUrl:process.env.APP_URL||'http://localhost:3000',cronConfigured:Boolean(process.env.CRON_SECRET&&process.env.CRON_SECRET.length>=32),replySyncRequired:process.env.REPLY_SYNC_REQUIRED!=='false'}};
+  return {serverTime:new Date().toISOString(),user,accounts,contacts,products,templates,campaigns,tasks,rfqs,quotes,messages,users,notifications,suppressions,audit,settings:Object.fromEntries(settings.map(s=>[s.settingKey,s.value])),mailboxes,cronRuns,imports,infrastructure:{smtpConfigured:Boolean(process.env.SMTP_HOST&&process.env.SMTP_FROM_EMAIL),smtpEnabled:mailReady(),mailEnabled:process.env.MAIL_ENABLED==='true',googleConfigured:oauthConfigured('google'),microsoftConfigured:oauthConfigured('microsoft'),appUrl:appOrigin(),cronConfigured:Boolean(process.env.CRON_SECRET&&process.env.CRON_SECRET.length>=32),replySyncRequired:process.env.REPLY_SYNC_REQUIRED!=='false'}};
 }

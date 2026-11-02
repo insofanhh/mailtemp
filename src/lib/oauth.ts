@@ -3,6 +3,7 @@ import {rows,run,sqlDate} from './db';
 import {HttpError,hash,type User} from './auth';
 import {processEvent} from './events';
 import type {RowDataPacket} from 'mysql2/promise';
+import {appOrigin} from './app-url';
 
 type Provider='google'|'microsoft';
 type TokenResponse={access_token:string;refresh_token?:string;expires_in:number};
@@ -14,7 +15,7 @@ function config(provider:Provider){
   const tenant=encodeURIComponent(process.env.MICROSOFT_TENANT||'common');
   return provider==='google'?{clientId:process.env.GOOGLE_CLIENT_ID!,secret:process.env.GOOGLE_CLIENT_SECRET!,authorize:'https://accounts.google.com/o/oauth2/v2/auth',token:'https://oauth2.googleapis.com/token',scope:'openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send'}:{clientId:process.env.MICROSOFT_CLIENT_ID!,secret:process.env.MICROSOFT_CLIENT_SECRET!,authorize:`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`,token:`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,scope:'offline_access User.Read Mail.Read Mail.Send'};
 }
-function redirectUri(provider:Provider){return `${process.env.APP_URL}/api/oauth/${provider}/callback`;}
+function redirectUri(provider:Provider){return `${appOrigin()}/api/oauth/${provider}/callback`;}
 async function fetchJson(url:string,options?:RequestInit){const response=await fetch(url,{...options,signal:options?.signal?AbortSignal.any([options.signal,AbortSignal.timeout(10000)]):AbortSignal.timeout(10000)});if(!response.ok)throw new Error(`Dịch vụ email trả về HTTP ${response.status}.`);return response.json();}
 export async function oauthStart(provider:Provider,user:User){
   if(!oauthConfigured(provider))throw new HttpError(409,'Chưa cấu hình OAuth client cho nhà cung cấp này.');

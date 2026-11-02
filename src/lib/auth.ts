@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { rows, run } from './db';
+import {hasTrustedOrigin} from './app-url';
 
 import { COOKIE, hash, userFromToken, type User } from './session';
 export { COOKIE, hash, userFromToken, type User } from './session';
@@ -17,8 +18,7 @@ export async function createSession(userId: string) {
   (await cookies()).set(COOKIE,token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:43200});
 }
 export function sameOrigin(request: Request) {
-  const allowed = new URL(process.env.APP_URL || 'http://localhost:3000').origin;
-  if (request.headers.get('origin') !== allowed) throw new HttpError(403,'Yêu cầu không cùng nguồn.');
+  if (!hasTrustedOrigin(request)) throw new HttpError(403,'Yêu cầu không cùng nguồn.');
 }
 export async function ownAccount(user: User, id: string, db?: Parameters<typeof rows>[2]) {
   const result = await rows('SELECT * FROM accounts WHERE id=? AND deletedAt IS NULL'+(db?' FOR UPDATE':''),[id],db);

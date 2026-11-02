@@ -6,6 +6,7 @@ import {mailReady,messageContent,renderMail,sendSmtpMail} from './mail';
 import {deliveryFailure} from './smtp';
 import {DIRECT_SCHEDULED_BLOCK_SQL} from './direct-mail-conflicts';
 import {sendOAuth,syncMailbox} from './oauth';
+import {appOrigin} from './app-url';
 
 export async function claimRecipient(recipientId:string){
   return transaction(async db=>{
@@ -22,7 +23,7 @@ export async function claimRecipient(recipientId:string){
     let content:null|{subject:string;body:string}=null;
     try{content=renderMail(campaign.subject,r.step>0?campaign.followupBody:campaign.body,contact,product||null,sender?.name||'');}catch(error){reason=(error as Error).message;}
     if(reason||!content){await run("UPDATE campaign_recipients SET status='skipped',error=? WHERE id=?",[reason||'Nội dung không hợp lệ',r.id],db);return null;}
-    const messageId=`<${r.id}@${new URL(process.env.APP_URL!).hostname}>`;
+    const messageId=`<${r.id}@${new URL(appOrigin()).hostname}>`;
     await run("UPDATE campaign_recipients SET status='sending',attempts=attempts+1,claimedAt=UTC_TIMESTAMP(3),messageId=?,renderedSubject=?,renderedBody=?,error=NULL WHERE id=?",[messageId,content.subject,content.body,r.id],db);
     await run("UPDATE campaigns SET status='running' WHERE id=?",[campaign.id],db);
     return {r,campaign,contact,content,messageId,sender};
