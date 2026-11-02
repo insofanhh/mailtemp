@@ -38,12 +38,12 @@ try{
   assert.equal((await request('direct-mail/preview',{...input,ownerId:adminId})).status,403);
   pass('Preview, exclusion confirmation, stale data and idempotent retries work with no schedule or address requirement');
   const details=await api('direct-mail/'+started.id),recipient=details.recipients.find((r:{status:string})=>r.status==='pending');
-  const fake=async(envelope:{email:string;subject:string;body:string;contactId:string})=>{sends++;assert.ok(envelope.email.endsWith('@example.invalid'));assert.ok(envelope.subject.startsWith('[QC]'));assert.ok(envelope.body.includes('An'));const content=await messageContent(envelope.contactId,envelope.body);assert.ok(content.text.includes('Từ chối nhận email:'));};
+  const fake=async(envelope:{email:string;subject:string;body:string;contactId:string})=>{sends++;assert.ok(envelope.email.endsWith('@example.invalid'));assert.ok(envelope.subject.startsWith('[QC]'));assert.ok(envelope.body.includes('An'));const content=await messageContent(envelope.contactId,envelope.body);assert.equal(content.text,envelope.body);assert.ok(!content.html.includes('<hr>'));assert.ok(!content.html.includes('/api/unsubscribe'));assert.ok(!content.html.includes('Từ chối nhận email'));assert.ok(content.headers['List-Unsubscribe'].includes('/api/unsubscribe'));};
   await Promise.all([dispatchDirectRecipient(recipient.id,fake),dispatchDirectRecipient(recipient.id,fake)]);assert.equal(sends,1);
   assert.equal((await rows('SELECT status,attempts FROM direct_mail_recipients WHERE id=?',[recipient.id]))[0].status,'accepted');
   assert.equal((await rows('SELECT status,attempts FROM direct_mail_recipients WHERE id=?',[recipient.id]))[0].attempts,1);
   await finishDirectBatches();assert.equal((await api('direct-mail/'+started.id)).batch.status,'completed');
-  pass('Actual dispatcher renders personalized mail, keeps unsubscribe footer, sends once under concurrent calls and completes batch');
+  pass('Actual dispatcher renders personalized mail, preserves authored content without an automatic footer, sends once under concurrent calls and completes batch');
   const errorContact=await contact(),errorBatch=await start([errorContact]);
   const [errorRecipient]=await rows('SELECT id FROM direct_mail_recipients WHERE batchId=?',[errorBatch.id]);
   await dispatchDirectRecipient(errorRecipient.id,async()=>{throw new SmtpDeliveryError({responseCode:535},'authentication');});

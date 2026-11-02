@@ -37,8 +37,5 @@ export function renderMail(subject:string,body:string,contact:Record<string,stri
 }
 export async function messageContent(contactId:string,body:string) {
   const unsubscribe=`${appOrigin()}/api/unsubscribe?token=${unsubscribeToken(contactId)}`;
-  const settings=await rows("SELECT settingKey,value FROM settings WHERE settingKey IN ('signature','sender_address')");
-  const values=Object.fromEntries(settings.map(r=>[r.settingKey,r.value]));
-  const text=body+`\n\n${values.signature||''}\n${values.sender_address||''}\nTừ chối nhận email: ${unsubscribe}`;
-  return {text,html:`<div style="font:15px/1.7 Arial,sans-serif;color:#21372f;white-space:pre-wrap">${escapeHtml(body)}</div><hr><p>${escapeHtml(values.signature||'')}<br>${escapeHtml(values.sender_address||'')}</p><p><a href="${escapeHtml(unsubscribe)}">Từ chối nhận email</a></p>`,headers:{'List-Unsubscribe':`<${unsubscribe}>`,'List-Unsubscribe-Post':'List-Unsubscribe=One-Click'}};
+  return {text:body,html:`<div style="font:15px/1.7 Arial,sans-serif;color:#21372f;white-space:pre-wrap">${escapeHtml(body)}</div>`,headers:{'List-Unsubscribe':`<${unsubscribe}>`,'List-Unsubscribe-Post':'List-Unsubscribe=One-Click'}};
 }
